@@ -1,0 +1,33 @@
+# Curated list of well-known Agent Skill names.
+# Used for typosquat distance checks (TRUST001) and impersonation checks (TRUST002).
+# One name per line, lowercase. Lines starting with # are comments.
+#
+# This list is intentionally small and high-confidence. A name close to one of
+# these but not equal to it is worth a human look. Users can extend this file.
+
+# Anthropic document skills
+docx
+pdf
+pptx
+xlsx
+
+# Common authoring and workflow skills
+skill-creator
+artifact-design
+code-review
+security-review
+commit-helper
+changelog
+release-notes
+test-writer
+readme-generator
+
+# Popular community skills
+find-skills
+grill-me
+web-search
+browser-automation
+frontend-design
+api-docs
+sql-helper
+data-analysis

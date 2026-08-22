@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Audit output (produced at runtime, never committed)
+skill-audit-report/
+
+# Eval working dirs and results
+evals/.workspace/
+evals/results/

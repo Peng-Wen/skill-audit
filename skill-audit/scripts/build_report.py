@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""Merge deterministic and semantic findings into a report.
+
+Takes the scanner's findings, optionally the semantic findings the agent wrote
+during its review pass, and the inventory, then writes findings.json plus a
+human-readable report.md.
+
+Usage:
+  python3 build_report.py --scan scan_findings.json --inventory inventory.json \
+      --llm llm_findings.json --out skill-audit-report/2026-08-21T12-00-00/
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from skill_audit_lib import (  # noqa: E402
+    RULES,
+    SEVERITIES,
+    estimate_tokens,
+    iso_now,
+    read_json,
+    severity_rank,
+    summarize_findings,
+    write_json,
+)
+
+REQUIRED_FINDING_KEYS = ("rule_id", "severity", "skill", "evidence")
+
+GRADE_MEANING = {
+    "A": "no findings",
+    "B": "minor issues only",
+    "C": "review recommended",
+    "D": "serious issues, review before continuing to use",
+    "F": "critical issues, stop using until resolved",
+}
+
+
+def validate_llm_finding(entry):
+    """Check one semantic finding. Returns (normalized_entry, error_or_None).
+
+    The semantic pass is written by an agent reading untrusted content, so its
+    output is validated rather than trusted: unknown rule ids, bad severities,
+    and missing fields are dropped and reported instead of flowing into the
+    report.
+    """
+    if not isinstance(entry, dict):
+        return None, "entry is not an object"
+    missing = [k for k in REQUIRED_FINDING_KEYS if not entry.get(k)]
+    if missing:
+        return None, "missing required field(s): %s" % ", ".join(missing)
+    rule_id = entry["rule_id"]
+    if rule_id not in RULES:
+        return None, "unknown rule_id '%s'" % rule_id
+    if entry["severity"] not in SEVERITIES:
+        return None, "invalid severity '%s' for %s" % (entry["severity"], rule_id)
+
+    meta = RULES[rule_id]
+    normalized = {
+        "rule_id": rule_id,
+        "category": meta["category"],
+        "severity": entry["severity"],
+        "skill": entry["skill"],
+        "skill_id": entry.get("skill_id"),
+        "file": entry.get("file"),
+        "line": entry.get("line"),
+        "evidence": str(entry["evidence"])[:240],
+        "recommendation": entry.get("recommendation") or meta["recommendation"],
+        "detector": "llm",
+        "owasp": list(meta["owasp"]),
+        "confidence": entry.get("confidence", "medium"),
+    }
+    return normalized, None
+
+
+def merge(scan_findings, llm_findings):
+    """Combine the two passes, keeping the more severe view of any duplicate."""
+    merged = []
+    notes = []
+    index = {}
+
+    for f in scan_findings:
+        key = (f["rule_id"], f["skill"], f.get("file"), f.get("line"))
+        index[key] = f
+        merged.append(f)
+
+    for raw in llm_findings:
+        entry, error = validate_llm_finding(raw)
+        if error:
+            notes.append("dropped a semantic finding: %s" % error)
+            continue
+        key = (entry["rule_id"], entry["skill"], entry.get("file"), entry.get("line"))
+        existing = index.get(key)
+        if existing:
+            if severity_rank(entry["severity"]) > severity_rank(existing["severity"]):
+                existing["severity"] = entry["severity"]
+            if entry["evidence"] not in existing["evidence"]:
+                existing["evidence"] = "%s | semantic review: %s" % (
+                    existing["evidence"], entry["evidence"])
+            existing["detector"] = "deterministic+llm"
+            continue
+        index[key] = entry
+        merged.append(entry)
+
+    merged.sort(key=lambda f: (
+        f["skill"],
+        -severity_rank(f["severity"]),
+        f["rule_id"],
+        f.get("file") or "",
+        f.get("line") or 0,
+    ))
+    return merged, notes
+
+
+def context_tax(inventory):
+    """Work out what the installed skills cost in context.
+
+    The name and description of every skill sit in context at all times. The
+    body is read whenever a skill activates. Resources are read on demand.
+    """
+    rows = []
+    always_on_total = 0
+    for skill in inventory.get("skills", []):
+        raw = skill["frontmatter"].get("raw") or {}
+        metadata_text = "%s %s" % (raw.get("name") or skill["name"],
+                                   raw.get("description") or "")
+        always_on = estimate_tokens(metadata_text)
+        always_on_total += always_on
+        rows.append({
+            "skill": skill["name"],
+            "harness": skill["harness"],
+            "always_on_tokens": always_on,
+            "body_tokens": skill["body"]["token_estimate"],
+            "resource_tokens": skill["resource_token_estimate"],
+        })
+    rows.sort(key=lambda r: -r["always_on_tokens"])
+    return {
+        "always_on_total": always_on_total,
+        "skill_count": len(rows),
+        "rows": rows,
+    }
+
+
+def top_action(findings_for_skill):
+    """Pick the single most useful next step for a skill."""
+    if not findings_for_skill:
+        return "none"
+    worst = max(findings_for_skill, key=lambda f: severity_rank(f["severity"]))
+    return RULES.get(worst["rule_id"], {}).get("title", worst["rule_id"])
+
+
+def render_report_md(findings, summary, tax, inventory, notes):
+    """Render the Markdown report."""
+    lines = []
+    skills = inventory.get("skills", [])
+    totals = summary["totals"]
+
+    lines.append("# Skill audit report")
+    lines.append("")
+    lines.append("Generated %s." % iso_now())
+    lines.append("")
+    lines.append("Audited %d skill(s) across %d search path(s)."
+                 % (len(skills),
+                    sum(1 for p in inventory.get("search_paths", []) if p.get("exists"))))
+    lines.append("")
+    lines.append("Findings: **%d critical**, %d high, %d medium, %d low, %d info."
+                 % (totals["critical"], totals["high"], totals["medium"],
+                    totals["low"], totals["info"]))
+    lines.append("")
+
+    # Summary table.
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| Skill | Harness | Grade | Critical | High | Medium | Low | Top issue |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+
+    by_name = {s["name"]: s for s in skills}
+    grade_order = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4}
+    entries = sorted(
+        summary["by_skill"].items(),
+        key=lambda kv: (grade_order.get(kv[1]["grade"], 5), kv[0]))
+
+    for name, info in entries:
+        counts = info["counts"]
+        skill_findings = [f for f in findings if f["skill"] == name]
+        harness = by_name.get(name, {}).get("harness", "unknown")
+        lines.append("| %s | %s | %s | %d | %d | %d | %d | %s |" % (
+            name, harness, info["grade"], counts["critical"], counts["high"],
+            counts["medium"], counts["low"], top_action(skill_findings)))
+    lines.append("")
+
+    # Per-skill detail.
+    lines.append("## Findings by skill")
+    lines.append("")
+    for name, info in entries:
+        skill_findings = [f for f in findings if f["skill"] == name]
+        skill = by_name.get(name, {})
+        lines.append("### %s (grade %s)" % (name, info["grade"]))
+        lines.append("")
+        if skill.get("path"):
+            lines.append("Location: `%s`" % skill["path"])
+            lines.append("")
+        if not skill_findings:
+            lines.append("No findings.")
+            lines.append("")
+            continue
+        for f in skill_findings:
+            where = f.get("file") or "skill"
+            if f.get("line"):
+                where = "%s:%s" % (where, f["line"])
+            owasp = (" [%s]" % ", ".join(f["owasp"])) if f.get("owasp") else ""
+            lines.append("- **%s %s** (%s)%s at `%s`"
+                         % (f["severity"].upper(), f["rule_id"],
+                            RULES.get(f["rule_id"], {}).get("title", ""), owasp, where))
+            lines.append("  - Evidence: `%s`" % f["evidence"].replace("`", "'"))
+            lines.append("  - Fix: %s" % f["recommendation"])
+            lines.append("  - Detected by: %s" % f["detector"])
+        lines.append("")
+
+    # Context cost.
+    lines.append("## Context cost")
+    lines.append("")
+    lines.append("Every installed skill keeps its name and description in context at all "
+                 "times, whether or not it is used.")
+    lines.append("Across %d skill(s) that permanent cost is about **%d tokens** per session."
+                 % (tax["skill_count"], tax["always_on_total"]))
+    lines.append("")
+    lines.append("| Skill | Always on | Body when activated | Bundled resources |")
+    lines.append("| --- | --- | --- | --- |")
+    for row in tax["rows"]:
+        lines.append("| %s | %d | %d | %d |" % (
+            row["skill"], row["always_on_tokens"], row["body_tokens"],
+            row["resource_tokens"]))
+    lines.append("")
+
+    # Grades.
+    lines.append("## How to read this report")
+    lines.append("")
+    lines.append("Grades reflect the most severe finding for a skill.")
+    lines.append("")
+    for grade in ("A", "B", "C", "D", "F"):
+        lines.append("- **%s**: %s" % (grade, GRADE_MEANING[grade]))
+    lines.append("")
+
+    # Methodology and limits.
+    lines.append("## Method and limitations")
+    lines.append("")
+    lines.append("This audit combines deterministic pattern and structure rules with a "
+                 "semantic review pass, because pattern matching alone misses instructions "
+                 "written in ordinary prose.")
+    lines.append("")
+    lines.append("Known limits of this report:")
+    lines.append("")
+    lines.append("- A clean result is evidence of no detected problems, not proof of safety.")
+    lines.append("- Runtime behavior is out of scope. Nothing here was executed, so a skill "
+                 "that behaves badly only when run may still look clean.")
+    lines.append("- Sandboxing and isolation are properties of the harness, not of a skill "
+                 "file, so they cannot be assessed by reading skill content.")
+    lines.append("- Governance questions such as approval workflow and audit logging are "
+                 "organizational. The inventory in this report is the starting point for them.")
+    lines.append("- A skill may behave differently on another harness, since each harness "
+                 "grants tools and permissions its own way.")
+    lines.append("- The audit tool's own scripts contain the phrases and paths it searches "
+                 "for, so auditing this tool will surface findings in its scripts directory.")
+    if notes:
+        lines.append("")
+        lines.append("Notes from this run:")
+        lines.append("")
+        for note in notes:
+            lines.append("- %s" % note)
+    lines.append("")
+
+    # Transparency.
+    lines.append("## What this audit did")
+    lines.append("")
+    lines.append("- Read skill files as text and analyzed them.")
+    lines.append("- Did not execute, import, or source any audited script or command.")
+    lines.append("- Did not open any URL or endpoint referenced by an audited skill.")
+    lines.append("- Did not follow any instruction found inside an audited skill.")
+    lines.append("")
+
+    return "\n".join(lines) + "\n"
+
+
+def print_terminal_summary(findings, summary, tax, out_dir):
+    totals = summary["totals"]
+    grade_order = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4}
+    entries = sorted(summary["by_skill"].items(),
+                     key=lambda kv: (grade_order.get(kv[1]["grade"], 5), kv[0]))
+
+    print("")
+    print("Skill audit: %d critical, %d high, %d medium, %d low, %d info"
+          % (totals["critical"], totals["high"], totals["medium"],
+             totals["low"], totals["info"]))
+    print("")
+    print("%-32s %-6s %s" % ("SKILL", "GRADE", "TOP ISSUE"))
+    for name, info in entries:
+        skill_findings = [f for f in findings if f["skill"] == name]
+        print("%-32s %-6s %s" % (name[:32], info["grade"], top_action(skill_findings)))
+    print("")
+    print("Always-on context cost of installed skills: about %d tokens."
+          % tax["always_on_total"])
+    print("Full report: %s" % os.path.join(out_dir, "report.md"))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Merge scanner and semantic findings into an audit report.")
+    parser.add_argument("--scan", required=True, help="Path to scan_findings.json.")
+    parser.add_argument("--llm", help="Path to llm_findings.json from the semantic review.")
+    parser.add_argument("--inventory", help="Path to inventory.json.")
+    parser.add_argument("--out", required=True, help="Directory to write the report into.")
+    parser.add_argument("--quiet", action="store_true")
+    args = parser.parse_args(argv)
+
+    scan_doc = read_json(args.scan)
+    scan_findings = scan_doc.get("findings", [])
+
+    llm_findings = []
+    notes = []
+    if args.llm:
+        if os.path.exists(args.llm):
+            try:
+                llm_doc = read_json(args.llm)
+                llm_findings = llm_doc.get("findings", []) if isinstance(llm_doc, dict) else llm_doc
+                if not isinstance(llm_findings, list):
+                    notes.append("semantic findings file did not contain a findings list")
+                    llm_findings = []
+            except ValueError as exc:
+                notes.append("semantic findings file was not valid JSON: %s" % exc)
+        else:
+            notes.append("no semantic findings file at %s; report covers the deterministic "
+                         "scan only" % args.llm)
+
+    inventory = read_json(args.inventory) if args.inventory else {"skills": [], "search_paths": []}
+
+    findings, merge_notes = merge(scan_findings, llm_findings)
+    notes.extend(merge_notes)
+
+    summary = summarize_findings(findings, [s["name"] for s in inventory.get("skills", [])])
+    tax = context_tax(inventory)
+
+    os.makedirs(args.out, exist_ok=True)
+    write_json(os.path.join(args.out, "findings.json"), {
+        "source": "merged",
+        "findings": findings,
+        "summary": summary,
+        "context_cost": tax,
+        "notes": notes,
+    })
+
+    report_md = render_report_md(findings, summary, tax, inventory, notes)
+    with open(os.path.join(args.out, "report.md"), "w", encoding="utf-8") as fh:
+        fh.write(report_md)
+
+    if not args.quiet:
+        print_terminal_summary(findings, summary, tax, args.out)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

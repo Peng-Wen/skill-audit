@@ -1,0 +1,37 @@
+name: evals
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  scanner-lane:
+    # The deterministic lane is the gate: no model, no network, same answer
+    # every run. The live lane needs credentials and costs money, so it is run
+    # deliberately rather than on every push.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check repository invariants
+        run: python3 evals/check_invariants.py
+
+      - name: Validate against the Agent Skills specification
+        run: npx -y skills-ref@latest validate ./skill-audit
+
+      - name: Run the deterministic eval lane
+        run: python3 evals/run_evals.py --lane scanner-only --ci
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: evals/results/
+          if-no-files-found: ignore

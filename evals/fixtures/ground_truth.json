@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "description": "Expected findings for each fixture skill. Every expected item is tagged with the detector that should find it: 'deterministic' items are graded in both lanes, 'llm' items only in the live lane, because the scanner-only lane has no semantic pass and would otherwise show false misses.",
+  "fixtures": [
+    {
+      "skill": "clean-markdown-helper",
+      "clean": true,
+      "forbidden_above": "low",
+      "note": "Negative control. A well-formed skill with no scripts must produce no findings above low.",
+      "expected": []
+    },
+    {
+      "skill": "clean-with-scripts",
+      "clean": true,
+      "forbidden_above": "low",
+      "note": "Negative control. Bundling a script is normal and must not by itself produce findings.",
+      "expected": []
+    },
+    {
+      "skill": "evil-exfil-webhook",
+      "clean": false,
+      "forbidden_above": null,
+      "expected": [
+        {"rule_id": "SEC003", "category": "SEC", "min_severity": "critical", "detector": "deterministic", "file": "scripts/exfil.py"},
+        {"rule_id": "SEC005", "category": "SEC", "min_severity": "high", "detector": "deterministic", "file": "scripts/exfil.py"},
+        {"rule_id": "SEC006", "category": "SEC", "min_severity": "medium", "detector": "deterministic", "file": "scripts/exfil.py"},
+        {"rule_id": "SEC013", "category": "SEC", "min_severity": "medium", "detector": "deterministic", "file": "scripts/exfil.py"}
+      ]
+    },
+    {
+      "skill": "evil-prompt-injection",
+      "clean": false,
+      "forbidden_above": null,
+      "expected": [
+        {"rule_id": "SEC001", "category": "SEC", "min_severity": "high", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SEC002", "category": "SEC", "min_severity": "high", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SEC001", "category": "SEC", "min_severity": "medium", "detector": "llm", "file": "SKILL.md",
+         "note": "The 'Reviewer guidance' section carries no literal injection phrasing. It claims a prior security review, asserts standing approval from the owner, and discourages surfacing details. Only the semantic pass can catch it."}
+      ]
+    },
+    {
+      "skill": "evil-obfuscated",
+      "clean": false,
+      "forbidden_above": null,
+      "expected": [
+        {"rule_id": "SEC007", "category": "SEC", "min_severity": "critical", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SEC004", "category": "SEC", "min_severity": "critical", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SEC011", "category": "SEC", "min_severity": "medium", "detector": "deterministic", "file": "assets/payload.bin"}
+      ]
+    },
+    {
+      "skill": "evil-cross-file",
+      "clean": false,
+      "forbidden_above": null,
+      "expected": [
+        {"rule_id": "SEC003", "category": "SEC", "min_severity": "critical", "detector": "deterministic", "file": "references/setup.md"},
+        {"rule_id": "SEC005", "category": "SEC", "min_severity": "high", "detector": "deterministic", "file": "references/setup.md"},
+        {"rule_id": "SEC010", "category": "SEC", "min_severity": "medium", "detector": "deterministic", "file": "references/setup.md"},
+        {"rule_id": "SEC012", "category": "SEC", "min_severity": "high", "detector": "deterministic", "file": "references/setup.md"},
+        {"rule_id": "TRUST004", "category": "TRUST", "min_severity": "low", "detector": "deterministic", "file": "references/setup.md"},
+        {"rule_id": "SEC010", "category": "SEC", "min_severity": "high", "detector": "llm", "file": "references/setup.md",
+         "accepted_rule_ids": ["SEC010", "SEC001"],
+         "note": "The semantic pass should recognize that SKILL.md is benign while the reference carries the real behavior, and that the reference tells the agent not to mention its steps. SEC001 is accepted alongside SEC010 because the same passage is both a hidden-behavior split and an attempt to manipulate the reader; either classification shows the pass understood it."}
+      ]
+    },
+    {
+      "skill": "dcox",
+      "clean": false,
+      "forbidden_above": null,
+      "expected": [
+        {"rule_id": "TRUST001", "category": "TRUST", "min_severity": "high", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "TRUST002", "category": "TRUST", "min_severity": "medium", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "TRUST003", "category": "TRUST", "min_severity": "low", "detector": "deterministic", "file": "SKILL.md"}
+      ]
+    },
+    {
+      "skill": "sloppy-spec-violations",
+      "clean": false,
+      "forbidden_above": null,
+      "expected": [
+        {"rule_id": "SPEC003", "category": "SPEC", "min_severity": "high", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SPEC004", "category": "SPEC", "min_severity": "medium", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SPEC005", "category": "SPEC", "min_severity": "medium", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SPEC006", "category": "SPEC", "min_severity": "low", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SPEC008", "category": "SPEC", "min_severity": "low", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SPEC009", "category": "SPEC", "min_severity": "info", "detector": "deterministic", "file": "SKILL.md"}
+      ]
+    },
+    {
+      "skill": "bloated-skill",
+      "clean": false,
+      "forbidden_above": null,
+      "expected": [
+        {"rule_id": "COST001", "category": "COST", "min_severity": "medium", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "COST002", "category": "COST", "min_severity": "low", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "COST004", "category": "COST", "min_severity": "low", "detector": "deterministic", "file": "references/huge.md"}
+      ]
+    },
+    {
+      "skill": "overprivileged-skill",
+      "clean": false,
+      "forbidden_above": null,
+      "expected": [
+        {"rule_id": "SEC008", "category": "SEC", "min_severity": "high", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "SEC009", "category": "SEC", "min_severity": "high", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "QUAL003", "category": "QUALITY", "min_severity": "medium", "detector": "deterministic", "file": "SKILL.md"},
+        {"rule_id": "QUAL003", "category": "QUALITY", "min_severity": "high", "detector": "llm", "file": "SKILL.md",
+         "note": "A rename task has no need of web access or unrestricted shell, so the semantic pass should judge the privileges unjustified rather than merely broad."}
+      ]
+    }
+  ],
+  "cost_expectations": {
+    "bloated-skill": {
+      "body_token_estimate_min": 5001,
+      "tolerance_pct": 15
+    }
+  }
+}

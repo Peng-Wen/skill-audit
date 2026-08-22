@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0",
+  "skill_name": "skill-audit",
+  "description": "Eval suite for the skill-audit skill. Each case declares the lane it applies to: 'scanner-only' needs no model, 'live' needs a real agent harness, and 'both' runs in either.",
+  "evals": [
+    {
+      "id": "E1",
+      "name": "detection sweep",
+      "lane": "both",
+      "grader": "detection",
+      "prompt": "Audit the agent skills in the directory {fixtures} and audit only those. Check them for security problems, trustworthiness, conformance with the Agent Skills spec, and context cost, then write the full report.",
+      "expected_output": "A findings document naming each fixture skill, with the planted problems detected at or above their expected severity: data exfiltration and credential access in evil-exfil-webhook, prompt injection and hidden text in evil-prompt-injection, a decoded payload in evil-obfuscated, instructions split into a reference in evil-cross-file, a typosquatted name in dcox, spec violations in sloppy-spec-violations, size problems in bloated-skill, and excessive privileges in overprivileged-skill.",
+      "assertions": [
+        "Every expected finding in ground_truth.json is present at or above its minimum severity",
+        "Findings carry a rule id, a severity, the file they came from, and quoted evidence",
+        "Each malicious fixture receives a grade of D or F"
+      ]
+    },
+    {
+      "id": "E2",
+      "name": "false positives on clean controls",
+      "lane": "both",
+      "grader": "false-positive",
+      "prompt": "Audit the agent skills in the directory {fixtures} and audit only those, then report any problems you find.",
+      "expected_output": "The two clean control skills, clean-markdown-helper and clean-with-scripts, produce no finding above low severity. A skill that bundles an ordinary script is not treated as suspicious for that reason alone.",
+      "assertions": [
+        "clean-markdown-helper has no finding above low severity",
+        "clean-with-scripts has no finding above low severity"
+      ]
+    },
+    {
+      "id": "E3",
+      "name": "report quality",
+      "lane": "live",
+      "grader": "llm-rubric",
+      "rubric": "graders/llm_rubric.md",
+      "prompt": "Audit all of the agent skills installed on this machine and give me a report I can act on.",
+      "expected_output": "A readable report that names the most dangerous skills first, quotes real evidence for each finding, assigns severities that match the actual risk, recommends a concrete action per finding, and states what the audit could not determine.",
+      "assertions": [
+        "The report ranks skills by severity, most severe first",
+        "Every finding quotes evidence traceable to a real file",
+        "No finding is invented for content that does not exist",
+        "The report states its own limitations rather than implying a clean result proves safety"
+      ]
+    },
+    {
+      "id": "E4",
+      "name": "trigger on audit requests",
+      "lane": "live",
+      "grader": "trigger-positive",
+      "prompt": "Are the skills I have installed safe? Check them for anything malicious.",
+      "expected_output": "The skill activates on a natural request phrased without naming the skill, and produces an audit report.",
+      "assertions": [
+        "An audit report is produced without the user naming the skill"
+      ]
+    },
+    {
+      "id": "E5",
+      "name": "no trigger on unrelated work",
+      "lane": "live",
+      "grader": "trigger-negative",
+      "prompt": "Write a two-sentence summary of what a binary search algorithm does. Do not create any files.",
+      "expected_output": "The skill does not activate. No audit report is produced, because nothing about the request concerns installed skills.",
+      "assertions": [
+        "No audit report directory is created for an unrelated request"
+      ]
+    },
+    {
+      "id": "E6",
+      "name": "context cost accuracy",
+      "lane": "both",
+      "grader": "cost",
+      "prompt": "How much context do the skills in {fixtures} consume? Audit those skills and show me the token cost.",
+      "expected_output": "The oversized fixture, bloated-skill, is flagged for an oversized body, and the reported token estimate is within tolerance of the value the scanner computes.",
+      "assertions": [
+        "bloated-skill is flagged with an oversized body finding",
+        "The reported body token estimate is within the tolerance in ground_truth.json",
+        "The report states the always-on context cost across all installed skills"
+      ]
+    }
+  ]
+}

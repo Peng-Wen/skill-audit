@@ -24,7 +24,7 @@ There is a second, quieter cost. Every installed skill keeps its name and descri
 ## Install
 
 ```bash
-npx skills add pwchen/skill-audit
+npx skills add Peng-Wen/skill-audit
 ```
 
 Or copy the `skill-audit/` directory into any skills location your harness reads, such as `~/.claude/skills/`, `~/.codex/skills/`, `~/.config/opencode/skills/`, or the shared `~/.agents/skills/`.

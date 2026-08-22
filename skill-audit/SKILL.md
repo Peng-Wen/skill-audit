@@ -4,7 +4,7 @@ description: Audit the Agent Skills installed on this machine for security, trus
 license: MIT
 metadata:
   version: "0.1.0"
-  repository: "https://github.com/pwchen/skill-audit"
+  repository: "https://github.com/Peng-Wen/skill-audit"
 ---
 
 # Skill audit

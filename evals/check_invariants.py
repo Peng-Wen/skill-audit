@@ -112,6 +112,29 @@ def check_fixture_banners(failures):
                     % os.path.relpath(path, REPO))
 
 
+def check_rubric_weights(failures):
+    """The rubric's stated weights and the scoring code must agree.
+
+    The rubric is prose a model reads; judge_report.py is the arithmetic that
+    turns its dimensions into a number. If they drift, E3 keeps producing a
+    score while that score quietly stops meaning what the rubric says.
+    """
+    sys.path.insert(0, os.path.join(HERE, "graders"))
+    import judge_report
+
+    rubric_path = os.path.join(HERE, "graders", "llm_rubric.md")
+    with open(rubric_path, "r", encoding="utf-8") as fh:
+        mismatched, missing = judge_report.check_rubric_sync(fh.read())
+    for problem in mismatched:
+        failures.append("rubric weight drift, %s" % problem)
+    for name in missing:
+        failures.append("llm_rubric.md states no weight for the %r dimension" % name)
+
+    total = sum(judge_report.WEIGHTS.values())
+    if abs(total - 1.0) > 1e-9:
+        failures.append("rubric weights sum to %.4f rather than 1.0" % total)
+
+
 def main():
     failures = []
     check_shipped_contents(failures)
@@ -119,9 +142,10 @@ def main():
     check_skill_frontmatter(failures)
     total, stray = check_self_audit_location(failures)
     check_fixture_banners(failures)
+    check_rubric_weights(failures)
 
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
-          "self-audit location, fixture banners.")
+          "self-audit location, fixture banners, rubric weights.")
     print("Self-audit baseline: %d finding(s), %d outside scripts/ (must be 0)."
           % (total, stray))
 

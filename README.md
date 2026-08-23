@@ -107,7 +107,14 @@ python3 evals/run_evals.py --lane live --agent claude --trials 5
 The suite runs against a corpus of ten fixture skills, eight with planted problems and two clean controls, and reports precision, recall, and F1 against enumerated ground truth.
 The clean controls exist to measure false positives, which matter as much as detection.
 
+Six cases measure three different things, because detection alone is not the whole job.
+**Detection accuracy** (E1, E2, E6) asks whether planted problems are found, clean skills are left alone, and context cost is estimated correctly; these run in both lanes and are what CI gates on.
+**Trigger accuracy** (E4, E5) asks whether the skill activates on a request that never names it and stays out of unrelated work, since a skill that intrudes on every session has a real cost.
+**Report quality** (E3) asks whether the report a reader actually receives is worth acting on: evidence traceable to real files, severities matching real risk, and no finding quietly dropped or talked away by the content being audited.
+The per-case table is in [evals/README.md](evals/README.md).
+
 Current scanner-only results: recall 1.00 across 29 expected findings, zero false positives on the clean controls.
+E3 is scored by a separate judge invocation, with the mechanically checkable parts computed rather than judged; see [Judging report quality](evals/README.md#judging-report-quality).
 
 The fixtures are inert.
 Hosts are `*.example.invalid`, secrets are fake strings rather than real key formats, the bundled binary is sixteen bytes of magic and zeros, and every planted file is labeled.

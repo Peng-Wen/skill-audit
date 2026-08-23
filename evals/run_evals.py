@@ -45,13 +45,19 @@ sys.path.insert(0, SCRIPTS)
 from skill_audit_lib import write_json  # noqa: E402
 
 import graders.grade_findings as grader  # noqa: E402
+import graders.judge_report as judge  # noqa: E402
 
 # The live lane is graded a little more loosely than the deterministic one,
 # because a model gives slightly different answers on identical input. The
 # scanner-only lane has no such excuse and is held to a higher bar.
 LANE_THRESHOLDS = {
     "scanner-only": {"recall": 0.95, "fp": 0.0, "f1": 0.85},
-    "live": {"recall": 0.90, "fp": 0.0, "f1": 0.80},
+    # "rubric" is the report-quality floor for E3, on the rubric's weighted
+    # 0-1 scale. It sits below the detection bars because it aggregates five
+    # dimensions and a single soft one should not sink an otherwise sound
+    # report, while a disqualifying behavior caps the total at 0.3 and so
+    # fails the case outright regardless of this number.
+    "live": {"recall": 0.90, "fp": 0.0, "f1": 0.80, "rubric": 0.75},
 }
 
 CLAUDE_DEFAULT_ARGS = [
@@ -200,6 +206,7 @@ def run_live_trial(case, agent, extra_args, fixtures_dir, workspace, timeout):
         "report_dir": report_dir,
         "findings_path": findings_path if produced_report else None,
         "produced_report": produced_report,
+        "staged_fixtures": staged_fixtures,
     }
 
 
@@ -255,6 +262,110 @@ def grade_detection(findings_path, ground_truth, lane, eval_id, out_dir, thresho
         "summary": summary,
     })
     return metrics, assertions, summary, failures
+
+
+# The judge sees the report, not the machine that produced it. Capping the
+# excerpt keeps a runaway report from overflowing the command line, and the cap
+# is disclosed to the judge so a truncated tail is never mistaken for an
+# omission.
+JUDGE_REPORT_CAP = 60000
+
+
+def scan_baseline(fixtures_dir, out_dir):
+    """Deterministic findings for the same corpus the agent audited.
+
+    This is the floor the report is measured against. Running the scanner here
+    rather than trusting the agent's own scan output means a report cannot lose
+    a critical finding and also hide the loss.
+    """
+    findings_path, _ = run_scanner(fixtures_dir, out_dir)
+    with open(findings_path, "r", encoding="utf-8") as fh:
+        return json.load(fh).get("findings", [])
+
+
+def judge_report_quality(case, run, args, out_dir, threshold):
+    """Score one report against the rubric. Returns (assertions, passed, verdict).
+
+    The model is a second, separate invocation with no memory of the audit, so
+    it is not grading its own work. Everything mechanically checkable is settled
+    before the model is asked anything.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    def fail(reason):
+        return ([{"text": "%s: the report could be judged" % case["id"],
+                  "passed": False, "evidence": reason}], False, None)
+
+    report_path = os.path.join(run["report_dir"] or "", "report.md")
+    if not run["findings_path"] or not os.path.exists(report_path):
+        return fail("no report.md and findings.json pair was produced; exit code %s"
+                    % run["exit_code"])
+
+    with open(run["findings_path"], "r", encoding="utf-8") as fh:
+        findings = json.load(fh).get("findings", [])
+    with open(report_path, "r", encoding="utf-8") as fh:
+        report_md = fh.read()
+
+    truncated = len(report_md) > JUDGE_REPORT_CAP
+    if truncated:
+        report_md = (report_md[:JUDGE_REPORT_CAP]
+                     + "\n\n[excerpt ends here; the report continued beyond the "
+                       "size this judge was given, so do not treat the missing "
+                       "tail as an omission]")
+
+    corpus = run["staged_fixtures"]
+    evidence_score, evidence_detail = judge.verify_evidence(findings, corpus)
+    dropped = judge.missing_critical(
+        findings, scan_baseline(corpus, os.path.join(out_dir, "baseline")))
+
+    with open(os.path.join(HERE, "graders", "llm_rubric.md"), "r", encoding="utf-8") as fh:
+        rubric_text = fh.read()
+
+    mismatched, missing = judge.check_rubric_sync(rubric_text)
+    if mismatched or missing:
+        return fail("the rubric and the scoring code disagree on weights: %s"
+                    % "; ".join(mismatched + ["%s has no stated weight" % m for m in missing]))
+
+    prompt = judge.build_judge_prompt(
+        rubric_text, report_md, findings, evidence_detail, dropped)
+
+    command = build_command(args.judge_agent or args.agent, prompt, None)
+    try:
+        completed = subprocess.run(
+            command, cwd=out_dir, capture_output=True, text=True, timeout=args.timeout)
+        stdout, code = completed.stdout, completed.returncode
+    except subprocess.TimeoutExpired:
+        return fail("the judge timed out after %ds" % args.timeout)
+    except FileNotFoundError as exc:
+        raise SystemExit("Could not run the judge command %r: %s" % (command[0], exc))
+
+    with open(os.path.join(out_dir, "judge_stdout.txt"), "w", encoding="utf-8") as fh:
+        fh.write(stdout or "")
+
+    raw, error = judge.extract_json(stdout)
+    if raw is None:
+        return fail("%s (judge exit code %s)" % (error, code))
+
+    verdict = judge.normalize_verdict(raw, evidence_score, dropped)
+    verdict["evidence_detail"] = evidence_detail
+    verdict["report_truncated"] = truncated
+    assertions = judge.assertions_for(case["id"], verdict, threshold)
+
+    write_json(os.path.join(out_dir, "grading.json"), {
+        "eval_id": case["id"],
+        "lane": "live",
+        "assertion_results": assertions,
+        "verdict": verdict,
+        "summary": {
+            "passed": sum(1 for a in assertions if a["passed"]),
+            "failed": sum(1 for a in assertions if not a["passed"]),
+            "pass_rate": round(
+                sum(1 for a in assertions if a["passed"]) / len(assertions), 4),
+        },
+    })
+
+    passed = verdict["total"] >= threshold and not verdict["disqualified"]
+    return assertions, passed, verdict
 
 
 def run_scanner_lane(args, ground_truth, cases):
@@ -333,6 +444,20 @@ def select_assertions(case, assertions):
     return []
 
 
+def rubric_summary(records):
+    """Mean and spread of the rubric total across a case's trials."""
+    totals = [r["rubric_total"] for r in records if "rubric_total" in r]
+    if not totals:
+        return None
+    return {
+        "mean": round(statistics.mean(totals), 4),
+        "stddev": round(statistics.stdev(totals), 4) if len(totals) > 1 else 0.0,
+        "min": round(min(totals), 4),
+        "trials": len(totals),
+        "disqualified_trials": sum(1 for r in records if r.get("disqualified")),
+    }
+
+
 def run_live_lane(args, ground_truth, cases):
     """Run the cases that need a real agent."""
     results = []
@@ -386,6 +511,26 @@ def run_live_lane(args, ground_truth, cases):
                     "evidence": "no report was produced" if not run["produced_report"]
                                 else "an unwanted report appeared at %s" % run["report_dir"],
                 }]
+            elif grader_kind == "llm-rubric":
+                if run["findings_path"]:
+                    shutil.copy(run["findings_path"],
+                                os.path.join(trial_out, "findings.json"))
+                assertions, passed, verdict = judge_report_quality(
+                    case, run, args, trial_out, thresholds["rubric"])
+                record["passed"] = passed
+                record["assertions"] = assertions
+                if verdict:
+                    record["rubric_total"] = verdict["total"]
+                    record["disqualified"] = verdict["disqualified"]
+                    if verdict["verdict_problems"]:
+                        print("    note: the judge's verdict had %d formatting "
+                              "problem(s): %s" % (len(verdict["verdict_problems"]),
+                                                  "; ".join(verdict["verdict_problems"])))
+                    if verdict["disqualified"]:
+                        print("    disqualified: %s" % verdict["disqualification_reason"])
+                    else:
+                        print("    rubric total %.3f (threshold %.2f)"
+                              % (verdict["total"], thresholds["rubric"]))
             elif run["findings_path"]:
                 shutil.copy(run["findings_path"], os.path.join(trial_out, "findings.json"))
                 leaked = isolation_leaks(run["findings_path"], ground_truth)
@@ -414,14 +559,29 @@ def run_live_lane(args, ground_truth, cases):
             trial_records.append(record)
 
         passes = [1.0 if r["passed"] else 0.0 for r in trial_records]
-        results.append({
+        entry = {
             "case": case["id"],
             "name": case["name"],
             "lane": "live",
             "passed": all(r["passed"] for r in trial_records),
             "pass_rate": sum(passes) / len(passes) if passes else 0.0,
             "trials": trial_records,
-        })
+        }
+        rubric = rubric_summary(trial_records)
+        if rubric:
+            entry["rubric"] = rubric
+            print("  %s rubric mean %.3f, stddev %.3f, lowest %.3f across %d trial(s)"
+                  % (case["id"], rubric["mean"], rubric["stddev"],
+                     rubric["min"], rubric["trials"]))
+        results.append(entry)
+
+        # A rubric case carries its own thresholds, so its failures have to be
+        # added to the CI list explicitly. Detection cases go through
+        # grade_detection, which already reports its own threshold misses.
+        if case.get("grader") == "llm-rubric" and not entry["passed"]:
+            all_failures.extend(
+                a["text"] for r in trial_records
+                for a in r["assertions"] if not a["passed"])
 
     aggregate_live(out_root, results, latest_metrics, latest_summary, thresholds,
                    args, all_failures)
@@ -480,6 +640,10 @@ def main(argv=None):
                         help="'claude', or a command template containing {prompt}.")
     parser.add_argument("--agent-args", nargs="*", default=None,
                         help="Extra arguments appended to the agent command.")
+    parser.add_argument("--judge-agent", default=None,
+                        help="Agent used to judge report quality in E3. Defaults to "
+                             "--agent. Set a different one to keep the model that "
+                             "wrote the report from also grading it.")
     parser.add_argument("--cases", help="Comma-separated case ids. Default: all for the lane.")
     parser.add_argument("--trials", type=int, default=5,
                         help="Live-lane trials per case: 5 smoke, 15 reliable, 30 regression.")

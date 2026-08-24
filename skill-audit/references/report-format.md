@@ -114,12 +114,29 @@ The scan skips one category of file: the source of the auditor that is executing
 Its rule tables contain the literal strings it searches for, so scanning them would report the detector's own vocabulary as findings.
 The skipped files are listed by name in the note, the exclusion is decided by resolved path rather than by skill name, and any other copy of the audit tool is scanned in full.
 
+## Action sections and the agent prompt
+
+`report.md` and the dashboard both carry two sections built from the merged findings.
+
+- **Next steps**: one entry per skill with a finding, ordered by severity, saying what to decide.
+- **Suggested fixes**: every finding as a work order, grouped by skill, with the rule, the location, and the change to make.
+
+Both come with the text to hand an agent, so a user can act on the audit without retyping it.
+That text embeds evidence quoted from audited skills, which makes it an injection path by construction, so it is built with three defences: it opens by stating that everything inside the markers is data rather than instructions, the quoted content sits inside explicit `BEGIN`/`END AUDIT DATA` markers, and any text trying to write those markers or close a code block is neutralized before embedding.
+
+When the semantic review reaches a different conclusion from the rule's generic recommendation, both are kept, the reviewer's judgment appended after the rule's.
+A scanner reporting broad permissions from structure and a review finding that breadth justified is a disagreement worth showing rather than hiding, and dropping the second half would produce a fix list asking for changes nobody wants.
+
 ## dashboard.html
 
 `scripts/build_dashboard.py` renders the merged `findings.json` as a single self-contained HTML page: severity totals, a grade per skill with its findings and evidence, filters, and the context cost table.
 
 - `--format standalone` writes a complete HTML document to open in a browser.
 - `--format artifact` writes the same page without the document wrapper, for a host that supplies its own `<head>` and `<body>`.
+
+Its two action sections each carry a button that delivers the section to an agent.
+Where the host exposes a way for the page to reach the agent the button sends; otherwise it copies to the clipboard, and it is labelled with whichever it will do rather than promising a delivery the runtime cannot make.
+The text is also rendered on the page, so a blocked clipboard is never a dead end.
 
 The page loads nothing over the network and executes nothing from an audited skill.
 Values taken from audited skills are embedded as escaped JSON and written into the DOM as text, never as markup, so a skill that plants a closing script tag or an event handler in its content cannot get it rendered as HTML.

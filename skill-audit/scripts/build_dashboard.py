@@ -32,6 +32,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from skill_audit_lib import (  # noqa: E402
     RULES,
     SEVERITIES,
+    build_agent_prompt,
+    build_fix_plan,
+    build_next_steps,
     iso_now,
     read_json,
     severity_rank,
@@ -98,6 +101,9 @@ def build_data(findings_doc, inventory, title):
 
     skills.sort(key=lambda s: (GRADE_ORDER.get(s["grade"], 5), s["name"]))
 
+    steps = build_next_steps(findings, summary)
+    plan = build_fix_plan(findings)
+
     return {
         "title": title,
         "generated_at": iso_now(),
@@ -106,6 +112,12 @@ def build_data(findings_doc, inventory, title):
         "skill_count": len(skills),
         "skills": skills,
         "notes": findings_doc.get("notes") or [],
+        "next_steps": steps,
+        "fix_plan": plan,
+        "prompts": {
+            "next-steps": build_agent_prompt("next-steps", steps, None, len(skills)),
+            "fixes": build_agent_prompt("fixes", None, plan, len(skills)),
+        },
     }
 
 
@@ -514,6 +526,121 @@ h2 {
 .bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
 .cost-row .n { text-align: right; color: var(--text-muted); }
 
+/* Action sections ------------------------------------------------------ */
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+  margin-bottom: 14px;
+}
+.section-head h2 { border: none; padding: 0; margin: 0; flex: 1 1 auto; }
+.send {
+  appearance: none;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: 7px 13px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 700;
+}
+.send:hover { filter: brightness(1.08); }
+.send:disabled { opacity: .5; cursor: default; }
+.send-status {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.steps { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.step {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--sev, var(--info));
+  border-radius: 6px;
+  padding: 11px 14px;
+}
+.step .idx {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.step .who { font-family: var(--mono); font-weight: 700; font-size: 14px; overflow-wrap: anywhere; }
+.step .what { margin-top: 2px; font-size: 14px; max-width: 76ch; text-wrap: pretty; }
+.step .tagline {
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--sev, var(--text-muted));
+}
+
+.fixgroups { display: flex; flex-direction: column; gap: 12px; }
+.fixgroup {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--sev, var(--info));
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.fixgroup h3 {
+  margin: 0 0 8px;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.fixgroup ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 7px; }
+.fixgroup li { font-size: 14px; max-width: 78ch; text-wrap: pretty; }
+.fixgroup code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--surface-sunk);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.prompt-peek { margin-top: 12px; }
+.prompt-peek > summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.prompt-peek > summary:hover { color: var(--text); }
+.prompt-peek pre {
+  margin: 10px 0 0;
+  padding: 12px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.nothing-to-do { font-size: 14px; color: var(--text-muted); max-width: 74ch; }
+
 /* Footer --------------------------------------------------------------- */
 
 .notes { display: flex; flex-direction: column; gap: 24px; }
@@ -581,6 +708,19 @@ BODY = """
     <div class="gauge" id="gauge"></div>
   </section>
 
+  <section aria-labelledby="steps-h">
+    <div class="section-head">
+      <h2 id="steps-h">Next steps</h2>
+      <button class="send" id="send-steps" type="button"></button>
+      <span class="send-status" id="status-steps" role="status" aria-live="polite"></span>
+    </div>
+    <ol class="steps" id="steps"></ol>
+    <details class="prompt-peek" id="peek-steps">
+      <summary>Show the exact text</summary>
+      <pre id="prompt-steps"></pre>
+    </details>
+  </section>
+
   <section aria-labelledby="roster-h">
     <h2 id="roster-h">Skills, worst first</h2>
     <div class="controls">
@@ -591,6 +731,19 @@ BODY = """
       <span class="count-note" id="count-note"></span>
     </div>
     <div class="roster" id="roster"></div>
+  </section>
+
+  <section aria-labelledby="fixes-h">
+    <div class="section-head">
+      <h2 id="fixes-h">Suggested fixes</h2>
+      <button class="send" id="send-fixes" type="button"></button>
+      <span class="send-status" id="status-fixes" role="status" aria-live="polite"></span>
+    </div>
+    <div class="fixgroups" id="fixgroups"></div>
+    <details class="prompt-peek" id="peek-fixes">
+      <summary>Show the exact text</summary>
+      <pre id="prompt-fixes"></pre>
+    </details>
   </section>
 
   <section aria-labelledby="cost-h">
@@ -836,6 +989,132 @@ SCRIPT = r"""
     });
     render();
   });
+
+  /* Next steps and suggested fixes ------------------------------------ */
+
+  /* A host that lets an embedded page talk to the agent that produced it
+     exposes a send hook on the window. The artifact runtime does not offer
+     one, so the button is labelled with what it will actually do here rather
+     than promising a delivery it cannot make. The prompt text is always on
+     the page too, so there is never a dead end. */
+  function agentSend() {
+    return (typeof window.sendPrompt === "function") ? window.sendPrompt : null;
+  }
+
+  function legacyCopy(text) {
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(
+        function () { return true; },
+        function () { return legacyCopy(text); });
+    }
+    return Promise.resolve(legacyCopy(text));
+  }
+
+  function wireSend(kind, btn, status, peek, pre, hasWork) {
+    pre.textContent = (data.prompts || {})[kind] || "";
+
+    if (!hasWork) {
+      btn.textContent = "Nothing to send";
+      btn.disabled = true;
+      return;
+    }
+
+    btn.textContent = agentSend() ? "Send to agent" : "Copy for your agent";
+    btn.addEventListener("click", function () {
+      var text = pre.textContent;
+      var send = agentSend();
+      if (send) {
+        try {
+          send(text);
+          status.textContent = "Sent to your agent.";
+          return;
+        } catch (err) {
+          /* fall through to the clipboard */
+        }
+      }
+      copyText(text).then(function (ok) {
+        if (ok) {
+          status.textContent = "Copied. Paste it to the agent that ran this audit.";
+        } else {
+          status.textContent = "Could not reach the clipboard. Copy the text below by hand.";
+          peek.open = true;
+        }
+      });
+    });
+  }
+
+  var stepsEl = document.getElementById("steps");
+  var steps = data.next_steps || [];
+  steps.forEach(function (step, i) {
+    var li = el("li", "step");
+    li.style.setProperty("--sev", SEV_VAR[step.severity] || "var(--info)");
+    li.appendChild(el("span", "idx", (i + 1) + "."));
+    var body = el("div");
+    body.appendChild(el("div", "who", step.skill));
+    body.appendChild(el("div", "what", step.headline + ". " + step.action));
+    body.appendChild(el("div", "tagline",
+      step.severity + " · grade " + step.grade + " · " + (step.rules || []).join(", ")));
+    li.appendChild(body);
+    stepsEl.appendChild(li);
+  });
+  if (!steps.length) {
+    stepsEl.parentNode.insertBefore(
+      el("p", "nothing-to-do", "No findings, so there is nothing to act on."), stepsEl);
+  }
+
+  var groupsEl = document.getElementById("fixgroups");
+  var plan = data.fix_plan || [];
+  plan.forEach(function (group) {
+    var box = el("div", "fixgroup");
+    box.style.setProperty("--sev", SEV_VAR[group.severity] || "var(--info)");
+    box.appendChild(el("h3", null, group.skill));
+    var ul = document.createElement("ul");
+    group.items.forEach(function (item) {
+      var li = document.createElement("li");
+      li.appendChild(el("code", null, item.rule_id));
+      li.appendChild(document.createTextNode(" " + item.severity + " at "));
+      li.appendChild(el("code", null, item.where));
+      li.appendChild(document.createTextNode(" - " + item.recommendation));
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    groupsEl.appendChild(box);
+  });
+  if (!plan.length) {
+    groupsEl.appendChild(el("p", "nothing-to-do", "No findings, so there is nothing to fix."));
+  }
+
+  wireSend("next-steps",
+    document.getElementById("send-steps"),
+    document.getElementById("status-steps"),
+    document.getElementById("peek-steps"),
+    document.getElementById("prompt-steps"),
+    steps.length > 0);
+
+  wireSend("fixes",
+    document.getElementById("send-fixes"),
+    document.getElementById("status-fixes"),
+    document.getElementById("peek-fixes"),
+    document.getElementById("prompt-fixes"),
+    plan.length > 0);
 
   /* Context cost ------------------------------------------------------ */
 

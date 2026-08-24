@@ -23,7 +23,7 @@ from skill_audit_lib import (  # noqa: E402
     build_fix_plan,
     build_next_steps,
     estimate_tokens,
-    iso_now,
+    local_now,
     read_json,
     severity_rank,
     summarize_findings,
@@ -178,7 +178,7 @@ def render_report_md(findings, summary, tax, inventory, notes):
 
     lines.append("# Skill audit report")
     lines.append("")
-    lines.append("Generated %s." % iso_now())
+    lines.append("Generated %s." % local_now())
     lines.append("")
     lines.append("Audited %d skill(s) across %d search path(s)."
                  % (len(skills),

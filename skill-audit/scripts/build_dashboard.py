@@ -35,7 +35,8 @@ from skill_audit_lib import (  # noqa: E402
     build_agent_prompt,
     build_fix_plan,
     build_next_steps,
-    iso_now,
+    iso_local_now,
+    local_now,
     read_json,
     severity_rank,
 )
@@ -106,7 +107,11 @@ def build_data(findings_doc, inventory, title):
 
     return {
         "title": title,
-        "generated_at": iso_now(),
+        # ISO with the local offset so the page can render it in the reader's
+        # own zone and format; the rendered string is the fallback for a client
+        # that cannot parse it.
+        "generated_at": iso_local_now(),
+        "generated_display": local_now(),
         "totals": summary.get("totals", {sev: 0 for sev in SEVERITIES}),
         "always_on_total": cost.get("always_on_total", 0),
         "skill_count": len(skills),
@@ -289,7 +294,8 @@ h2 {
   box-shadow: var(--shadow);
   transition: transform .12s ease, border-color .12s ease;
 }
-.tile:hover { transform: translateY(-1px); }
+.tile:not(:disabled):hover { transform: translateY(-1px); }
+.tile:disabled { cursor: default; opacity: .5; }
 .tile[aria-pressed="true"] {
   border-color: var(--sev, var(--accent));
   background: var(--surface-sunk);
@@ -793,6 +799,9 @@ SCRIPT = r"""
   var active = {};
   var query = "";
   var expanded = false;
+  /* Cards the reader opened or closed by hand. Kept across re-renders so
+     changing a filter does not undo what they just opened. */
+  var manualOpen = {};
 
   /* Every string below arrives from an audited skill, so it is written with
      textContent and never with innerHTML. */
@@ -827,27 +836,73 @@ SCRIPT = r"""
     verdict = "No findings across " + plural(data.skill_count, "skill") + ".";
   }
   document.getElementById("verdict").textContent = verdict;
+  function localStamp() {
+    var parsed = new Date(data.generated_at);
+    if (isNaN(parsed.getTime())) { return data.generated_display || data.generated_at; }
+    try {
+      return parsed.toLocaleString(undefined, {
+        dateStyle: "medium", timeStyle: "medium"
+      });
+    } catch (err) {
+      return parsed.toLocaleString();
+    }
+  }
+
   document.getElementById("meta").textContent =
-    plural(data.skill_count, "skill") + " audited · generated " + data.generated_at;
+    plural(data.skill_count, "skill") + " audited · generated " + localStamp();
 
   /* Severity gauge ---------------------------------------------------- */
 
   var gauge = document.getElementById("gauge");
+  var tileEls = {};
   SEV.forEach(function (sev) {
-    var n = totals[sev] || 0;
-    var tile = el("button", "tile" + (n === 0 ? " is-zero" : ""));
+    var tile = el("button", "tile");
     tile.type = "button";
     tile.style.setProperty("--sev", SEV_VAR[sev]);
     tile.setAttribute("aria-pressed", "false");
-    tile.appendChild(el("span", "n", n));
+    var count = el("span", "n", totals[sev] || 0);
+    tile.appendChild(count);
     tile.appendChild(el("span", "k", sev));
     tile.addEventListener("click", function () {
       active[sev] = !active[sev];
-      tile.setAttribute("aria-pressed", active[sev] ? "true" : "false");
       render();
     });
     gauge.appendChild(tile);
+    tileEls[sev] = {button: tile, count: count};
   });
+
+  /* Tile counts follow the text search but not the severity buttons: a facet
+     that zeroed out its siblings the moment you picked one would make a second
+     severity impossible to add. */
+  function facetCounts() {
+    var counts = {};
+    SEV.forEach(function (sev) { counts[sev] = 0; });
+    data.skills.forEach(function (skill) {
+      skill.findings.forEach(function (f) {
+        if (textMatchesFinding(skill, f)) { counts[f.severity] = (counts[f.severity] || 0) + 1; }
+      });
+    });
+    return counts;
+  }
+
+  function renderTiles() {
+    var counts = facetCounts();
+    SEV.forEach(function (sev) {
+      var entry = tileEls[sev];
+      var n = counts[sev] || 0;
+      var on = !!active[sev];
+      entry.count.textContent = n;
+      entry.button.className = "tile" + (n === 0 ? " is-zero" : "");
+      entry.button.setAttribute("aria-pressed", on ? "true" : "false");
+      /* Nothing to select is not a filter, it is a dead end. An active tile
+         stays live even at zero so it can always be switched back off. */
+      entry.button.disabled = (n === 0 && !on);
+      entry.button.title = entry.button.disabled
+        ? ("No " + sev + " findings" + (query ? " match this search" : ""))
+        : (on ? ("Showing " + sev + " findings. Click to stop filtering by it.")
+              : ("Show only " + sev + " findings"));
+    });
+  }
 
   /* Roster ------------------------------------------------------------ */
 
@@ -856,10 +911,22 @@ SCRIPT = r"""
     return parts.join("  ").toLowerCase().indexOf(query) !== -1;
   }
 
-  function findingMatches(skill, f) {
-    if (sevFilterOn() && !active[f.severity]) { return false; }
+  function textMatchesFinding(skill, f) {
     return textMatch([skill.name, skill.harness, skill.path || "", f.rule_id, f.title,
                       f.file || "", f.evidence, f.recommendation, f.detector]);
+  }
+
+  function findingMatches(skill, f) {
+    if (sevFilterOn() && !active[f.severity]) { return false; }
+    return textMatchesFinding(skill, f);
+  }
+
+  function activeFilterLabel() {
+    var parts = [];
+    var chosen = SEV.filter(function (s) { return active[s]; });
+    if (chosen.length) { parts.push(chosen.join(" or ")); }
+    if (query) { parts.push("\u201c" + query + "\u201d"); }
+    return parts.join(" and ");
   }
 
   function findingNode(f) {
@@ -894,11 +961,23 @@ SCRIPT = r"""
     return node;
   }
 
-  function skillNode(skill, shown) {
+  function skillNode(skill, shown, filtering) {
     var box = el("details", "skill");
-    box.open = expanded || (query !== "" && shown.length > 0);
+    /* Filtering to something and then having to open every card to see what
+       matched is the filter not doing its job. A hand-set card wins, because
+       the reader set it more recently than the filter did. */
+    if (Object.prototype.hasOwnProperty.call(manualOpen, skill.name)) {
+      box.open = manualOpen[skill.name];
+    } else {
+      box.open = expanded || (filtering && shown.length > 0);
+    }
 
     var summary = document.createElement("summary");
+    summary.addEventListener("click", function () {
+      /* The click flips the details after this handler runs, so the state the
+         reader is asking for is the opposite of the current one. */
+      manualOpen[skill.name] = !box.open;
+    });
     var grade = el("div", "grade", skill.grade);
     grade.style.setProperty("--sev", GRADE_VAR[skill.grade] || "var(--info)");
     grade.title = "Grade " + skill.grade + ": " + (GRADE_MEANING[skill.grade] || "");
@@ -945,8 +1024,10 @@ SCRIPT = r"""
     var filtering = query !== "" || sevFilterOn();
     var visible = 0;
     var shownFindings = 0;
+    var totalFindings = 0;
 
     data.skills.forEach(function (skill) {
+      totalFindings += skill.findings.length;
       var shown = skill.findings.filter(function (f) { return findingMatches(skill, f); });
       if (filtering && !shown.length) {
         // A text search still keeps a skill whose own name or path matches, so
@@ -957,13 +1038,21 @@ SCRIPT = r"""
       }
       visible += 1;
       shownFindings += shown.length;
-      roster.appendChild(skillNode(skill, shown));
+      roster.appendChild(skillNode(skill, shown, filtering));
     });
 
-    if (!visible) { roster.appendChild(el("div", "empty", "Nothing matches that filter.")); }
+    if (!visible) {
+      var label = activeFilterLabel();
+      roster.appendChild(el("div", "empty",
+        label ? ("No findings match " + label + ".") : "Nothing to show."));
+    }
 
-    document.getElementById("count-note").textContent =
-      "showing " + plural(visible, "skill") + " · " + plural(shownFindings, "finding");
+    document.getElementById("count-note").textContent = filtering
+      ? (shownFindings + " of " + plural(totalFindings, "finding") + " · " +
+         visible + " of " + plural(data.skills.length, "skill"))
+      : (plural(visible, "skill") + " · " + plural(shownFindings, "finding"));
+
+    renderTiles();
   }
 
   document.getElementById("q").addEventListener("input", function (e) {
@@ -974,6 +1063,7 @@ SCRIPT = r"""
   var toggleAll = document.getElementById("toggle-all");
   toggleAll.addEventListener("click", function () {
     expanded = !expanded;
+    manualOpen = {};
     toggleAll.textContent = expanded ? "Collapse all" : "Expand all";
     render();
   });
@@ -982,11 +1072,9 @@ SCRIPT = r"""
     active = {};
     query = "";
     expanded = false;
+    manualOpen = {};
     toggleAll.textContent = "Expand all";
     document.getElementById("q").value = "";
-    Array.prototype.forEach.call(gauge.querySelectorAll(".tile"), function (tile) {
-      tile.setAttribute("aria-pressed", "false");
-    });
     render();
   });
 

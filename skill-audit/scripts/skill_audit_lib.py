@@ -10,6 +10,7 @@ and analyzes them. Callers must preserve that guarantee.
 
 import datetime
 import json
+import locale
 import os
 import re
 import unicodedata
@@ -890,6 +891,26 @@ def load_known_skills(path):
 
 def iso_now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def local_now():
+    """Now, in the local zone, written the way this system writes dates.
+
+    iso_now() stays UTC because a stored timestamp should be comparable across
+    machines. This is the one a person reads, so it follows the machine's zone
+    and its LC_TIME format instead.
+    """
+    try:
+        locale.setlocale(locale.LC_TIME, "")
+    except (locale.Error, ValueError):
+        pass
+    stamp = datetime.datetime.now().astimezone()
+    return " ".join(stamp.strftime("%c %Z").split())
+
+
+def iso_local_now():
+    """Now as ISO 8601 with the local UTC offset, for a client to reformat."""
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def write_json(path, obj):

@@ -105,6 +105,25 @@ Requirements, because `build_report.py` validates every entry and drops the ones
 
 Dropped entries are recorded in the report's notes, so a malformed finding is visible rather than silent.
 
+## notes
+
+Both `scan_findings.json` and the merged `findings.json` carry a `notes` list, and `report.md` prints it under "Method and limitations".
+Notes record anything a reader needs in order to judge coverage rather than risk: a semantic entry that was dropped, a missing semantic findings file, or a file the scan deliberately skipped.
+
+The scan skips one category of file: the source of the auditor that is executing.
+Its rule tables contain the literal strings it searches for, so scanning them would report the detector's own vocabulary as findings.
+The skipped files are listed by name in the note, the exclusion is decided by resolved path rather than by skill name, and any other copy of the audit tool is scanned in full.
+
+## dashboard.html
+
+`scripts/build_dashboard.py` renders the merged `findings.json` as a single self-contained HTML page: severity totals, a grade per skill with its findings and evidence, filters, and the context cost table.
+
+- `--format standalone` writes a complete HTML document to open in a browser.
+- `--format artifact` writes the same page without the document wrapper, for a host that supplies its own `<head>` and `<body>`.
+
+The page loads nothing over the network and executes nothing from an audited skill.
+Values taken from audited skills are embedded as escaped JSON and written into the DOM as text, never as markup, so a skill that plants a closing script tag or an event handler in its content cannot get it rendered as HTML.
+
 ## Rule catalog
 
 Detector column values: `det` means the deterministic scanner finds it, `llm` means the semantic pass finds it, and `det+llm` means both contribute.

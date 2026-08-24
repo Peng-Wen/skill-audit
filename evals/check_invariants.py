@@ -10,6 +10,7 @@ Usage:
 
 import io
 import os
+import shutil
 import subprocess
 import sys
 
@@ -69,30 +70,67 @@ def check_skill_frontmatter(failures):
                         % (len(body) // 4))
 
 
-def check_self_audit_location(failures):
-    """The self-audit baseline is about where findings appear, not how many.
+def _scan(scanner_dir, target_dir, out_name):
+    """Run one scanner over one skill directory and return its findings."""
+    import json
+    scratch = os.environ.get("TMPDIR", "/tmp")
+    out = os.path.join(scratch, out_name)
+    subprocess.run(
+        [sys.executable, os.path.join(scanner_dir, "scan_skill.py"),
+         "--skill", target_dir, "--out", out, "--quiet"],
+        check=True)
+    with io.open(out, encoding="utf-8") as fh:
+        return json.load(fh).get("findings", [])
 
-    Findings inside scripts/ are expected, because the detection strings live
-    there. A finding in SKILL.md or references/ means the skill now breaks a
-    rule it enforces on others, which is the thing worth catching.
+
+def check_self_audit_clean(failures):
+    """The shipped skill has to pass the audit it performs on everything else.
+
+    A tool that grades other skills while failing its own rules has no standing.
+    The scanner does not pattern-scan its own executing source, so the findings
+    counted here are the ones any user would see: zero is the only acceptable
+    number, and the fix is always the skill's own wording, never a weaker rule.
+    """
+    findings = _scan(SCRIPTS, SKILL_DIR, "skill-audit-self-check.json")
+    if findings:
+        failures.append(
+            "the shipped skill does not audit clean, %d finding(s): %s. Fix the "
+            "skill rather than weakening the rule."
+            % (len(findings), "; ".join(
+                "%s %s in %s" % (f["severity"], f["rule_id"], f.get("file"))
+                for f in findings)))
+    return len(findings)
+
+
+def check_self_exclusion_is_identity_based(failures):
+    """A copy of this skill must still be scanned in full.
+
+    The scanner skipping its own source is safe only while the test is "is this
+    the code I am executing", decided by resolved path. If it ever degrades into
+    "is this named skill-audit", any skill could take the name and buy silence.
+    Copying the skill elsewhere and scanning it with the original proves the
+    difference: the copy is a different path, so its rule tables get reported.
     """
     scratch = os.environ.get("TMPDIR", "/tmp")
-    out = os.path.join(scratch, "skill-audit-self-check.json")
-    subprocess.run(
-        [sys.executable, os.path.join(SCRIPTS, "scan_skill.py"),
-         "--skill", SKILL_DIR, "--out", out, "--quiet"],
-        check=True)
-    import json
-    with io.open(out, encoding="utf-8") as fh:
-        findings = json.load(fh).get("findings", [])
-    stray = [f for f in findings if not (f.get("file") or "").startswith("scripts/")]
-    if stray:
+    copy_dir = os.path.join(scratch, "skill-audit-copy-check", "skill-audit")
+    if os.path.exists(os.path.dirname(copy_dir)):
+        shutil.rmtree(os.path.dirname(copy_dir))
+    shutil.copytree(SKILL_DIR, copy_dir,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    try:
+        findings = _scan(SCRIPTS, copy_dir, "skill-audit-copy-check.json")
+    finally:
+        shutil.rmtree(os.path.dirname(copy_dir), ignore_errors=True)
+
+    in_scripts = [f for f in findings if (f.get("file") or "").startswith("scripts/")]
+    if not in_scripts:
         failures.append(
-            "self-audit found %d finding(s) outside scripts/: %s. Fix the wording "
-            "in that file rather than weakening the rule."
-            % (len(stray), "; ".join("%s %s in %s" % (f["severity"], f["rule_id"],
-                                                      f.get("file")) for f in stray)))
-    return len(findings), len(stray)
+            "a separate copy of this skill scanned clean. The self-exclusion is "
+            "supposed to cover only the executing scanner's own path, so a copy "
+            "must still report the pattern strings in its scripts/ directory. "
+            "Check that is_auditor_own_source() compares resolved paths and not "
+            "skill names.")
+    return len(in_scripts)
 
 
 def check_fixture_banners(failures):
@@ -140,14 +178,17 @@ def main():
     check_shipped_contents(failures)
     check_rules_documented(failures)
     check_skill_frontmatter(failures)
-    total, stray = check_self_audit_location(failures)
+    own = check_self_audit_clean(failures)
+    copied = check_self_exclusion_is_identity_based(failures)
     check_fixture_banners(failures)
     check_rubric_weights(failures)
 
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
-          "self-audit location, fixture banners, rubric weights.")
-    print("Self-audit baseline: %d finding(s), %d outside scripts/ (must be 0)."
-          % (total, stray))
+          "self-audit cleanliness, self-exclusion scope, fixture banners, "
+          "rubric weights.")
+    print("Self-audit: %d finding(s) against the running scanner (must be 0); "
+          "%d finding(s) when a copy is scanned (must be above 0)."
+          % (own, copied))
 
     if failures:
         print("")

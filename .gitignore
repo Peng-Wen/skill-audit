@@ -12,3 +12,6 @@ skill-audit-report/
 # Eval working dirs and results
 evals/.workspace/
 evals/results/
+
+# Audit working files (produced at runtime, never committed)
+skill-audit-work/

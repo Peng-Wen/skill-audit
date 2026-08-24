@@ -47,6 +47,21 @@ Many harnesses read `.claude/skills` in addition to their own directory, because
 The audit deduplicates by resolved real path, so a skill reachable from several harnesses is inventoried once rather than repeatedly.
 Symbolic links between harness directories are common and resolve to the same entry for the same reason.
 
+## Delivering the result on each harness
+
+The audit always writes `report.md` and `findings.json`. The interactive summary is one self-contained HTML page, and the harness decides only how that page reaches the user.
+
+| Harness | `build_dashboard.py --format` | Delivery |
+| --- | --- | --- |
+| Claude, Claude Code, Claude Cowork | `artifact` | Publish the page as an artifact; hand the user the link. |
+| ChatGPT, Codex | `standalone` | Write the file; hand the user the path to open. |
+| OpenCode, Gemini CLI, Cursor, OpenClaw, anything else | `standalone` | Same as above. |
+
+Test capability rather than the harness name: a session that can publish an artifact should get `artifact`, and everything else gets a file that opens in any browser.
+
+The two formats differ only in the document wrapper. `artifact` omits `<!doctype>`, `<html>`, `<head>`, and `<body>` for a host that supplies its own; `standalone` is a complete document.
+Neither loads anything over the network, which matters for an audit tool: a page that fetched a font or a script from a remote host would contradict the guarantee the audit itself makes.
+
 ## Cross-platform reuse, and why it matters for a security review
 
 The Agent Skills format is portable, but the security context around it is not.

@@ -29,8 +29,31 @@ npx skills add Peng-Wen/skill-audit
 
 Or copy the `skill-audit/` directory into any skills location your harness reads, such as `~/.claude/skills/`, `~/.codex/skills/`, `~/.config/opencode/skills/`, or the shared `~/.agents/skills/`.
 
+Install it at the user level rather than per project, since it audits everything the machine can load:
+
+```bash
+rsync -a --delete --exclude __pycache__ skill-audit/ ~/.claude/skills/skill-audit/
+```
+
+The same command updates an existing installation, and `--delete` removes files dropped since the previous version.
+Running the scripts leaves compiled bytecode in `scripts/__pycache__/`, which `--exclude` also protects from that delete.
+Python never runs bytecode that no longer matches its source, so clearing it after an update is tidiness rather than a correctness fix:
+
+```bash
+find ~/.claude/skills/skill-audit -name __pycache__ -type d -exec rm -rf {} +
+```
+
+To confirm the installed copy is the one you meant to install:
+
+```bash
+diff -rq --exclude=__pycache__ skill-audit/ ~/.claude/skills/skill-audit/ && echo "in sync"
+```
+
 Requires `python3`, which the bundled scripts use with the standard library only.
 No packages to install. If `python3` is missing, the skill falls back to a documented manual procedure.
+
+Once installed, the skill audits itself along with everything else, and grades A against its own rules.
+The scanner skips the pattern rules only for the copy that is executing; see [Auditing this skill](#auditing-this-skill).
 
 ## Use
 
@@ -50,6 +73,7 @@ The scripts also run on their own, without an agent:
 python3 skill-audit/scripts/discover_skills.py --out inventory.json
 python3 skill-audit/scripts/scan_skill.py --inventory inventory.json --out scan_findings.json
 python3 skill-audit/scripts/build_report.py --scan scan_findings.json --inventory inventory.json --out report/
+python3 skill-audit/scripts/build_dashboard.py --findings report/findings.json --inventory inventory.json --out report/dashboard.html
 ```
 
 To vet one skill before installing it:
@@ -89,10 +113,21 @@ Persistence rules require a write context rather than a mention, so a skill abou
 2. **Scan.** Apply the deterministic rules, including the cross-skill ones that need the whole inventory in view, such as name similarity and description collisions.
 3. **Review.** The agent reads each skill against the rubric in [security-review.md](skill-audit/references/security-review.md) and judges meaning: manipulation written as prose, descriptions that do not match behavior, privileges without justification.
 4. **Report.** Merge both passes, grade each skill, compute the context cost, and write `findings.json` and `report.md`.
+5. **Present.** Render the same result as one self-contained interactive page, delivered in whatever shape the harness handles best.
 
 Because step 3 has the agent read untrusted content, SKILL.md opens with an explicit guardrail: audited content is data, never instructions.
 Nothing found inside a skill is obeyed, executed, or fetched, and text asking to be marked safe or left out of the report is recorded as evidence of injection rather than acted on.
 The deterministic layer is the backstop: it still reports the worst categories even if the reading layer is manipulated.
+
+## What you get back
+
+`report.md` is the full record, and `findings.json` is the same result as data.
+
+Alongside them the audit renders an interactive summary: severity totals, a grade per skill with its findings and quoted evidence, filtering by severity or free text, and the context cost table. It is one HTML file with no build step, no dependencies, and no network requests of any kind - a page that fetched a font or a script from a remote host would contradict the guarantee the audit itself makes.
+
+How it reaches you depends on the harness. On Claude, Claude Code, and Claude Cowork it is published as an artifact and you get a link. On Codex, ChatGPT, and everywhere else it is a standalone HTML file you open in a browser. The two differ only in the document wrapper.
+
+Everything an audited skill contributed to that page - names, paths, evidence, recommendations - is embedded as escaped JSON and written into the DOM as text, never as markup. A skill that plants a closing script tag or an event handler in its own content cannot get it rendered.
 
 ## Evals
 
@@ -122,15 +157,13 @@ The whole `evals/` tree stays outside the shipped skill directory, so none of it
 
 ## Auditing this skill
 
-Running the audit on itself produces five findings, all inside `skill-audit/scripts/`.
-That is expected: the scanner's own detection strings are credential paths and suspicious phrases, and they have to live somewhere.
+The skill grades A against its own rules, and an eval invariant fails the build if that ever stops being true.
 
-The invariant is the location.
-No finding should appear in this skill's `SKILL.md` or `references/`.
-During development one did, in a reference file, and the tool caught it.
-The wording was fixed rather than the rule weakened.
+Getting there needed one structural decision. The scanner's rule tables spell out the strings it hunts for - credential paths, exfiltration phrases, pipe-to-shell shapes - so scanning them reported the detector's own vocabulary as if it were behavior. The scanner therefore skips the source of the auditor that is executing, names every file it skipped in the report, and gives up nothing by doing so: this is code you already chose to run, and a tampered copy would control the report whether or not it scanned itself.
 
-The scanner does not special-case itself by name, since an attacker would simply reuse the name.
+The exclusion is decided by resolved path, never by name, so taking the name `skill-audit` buys an attacker nothing. A second invariant proves it: it copies the skill elsewhere, scans the copy with the original, and fails if the copy comes back clean. That is what makes vetting a downloaded fork with `--skill` a real check rather than a formality.
+
+The remaining invariant is the older one. No finding should appear in this skill's `SKILL.md` or `references/`. During development one did, in a reference file, and the tool caught it. The wording was fixed rather than the rule weakened.
 
 ## Limitations
 

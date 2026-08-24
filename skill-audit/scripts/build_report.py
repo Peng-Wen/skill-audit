@@ -93,6 +93,12 @@ def merge(scan_findings, llm_findings):
             continue
         key = (entry["rule_id"], entry["skill"], entry.get("file"), entry.get("line"))
         existing = index.get(key)
+        if existing is None and entry.get("line"):
+            # The scanner reports some rules at file level, with no line. When
+            # the semantic pass reaches the same conclusion about the same rule
+            # and file and happens to cite a line, that is the same finding
+            # seen twice, not two findings.
+            existing = index.get((entry["rule_id"], entry["skill"], entry.get("file"), None))
         if existing:
             if severity_rank(entry["severity"]) > severity_rank(existing["severity"]):
                 existing["severity"] = entry["severity"]
@@ -262,8 +268,10 @@ def render_report_md(findings, summary, tax, inventory, notes):
                  "organizational. The inventory in this report is the starting point for them.")
     lines.append("- A skill may behave differently on another harness, since each harness "
                  "grants tools and permissions its own way.")
-    lines.append("- The audit tool's own scripts contain the phrases and paths it searches "
-                 "for, so auditing this tool will surface findings in its scripts directory.")
+    lines.append("- The scanner does not run its pattern rules over its own executing "
+                 "source, because its rule tables spell out the strings it searches for. "
+                 "Any file skipped for that reason is named in the notes below, and any "
+                 "other copy of the audit tool is scanned in full.")
     if notes:
         lines.append("")
         lines.append("Notes from this run:")
@@ -319,7 +327,9 @@ def main(argv=None):
     scan_findings = scan_doc.get("findings", [])
 
     llm_findings = []
-    notes = []
+    # Notes from the scan come first: they describe the coverage the rest of
+    # the report rests on, such as any file the scan deliberately skipped.
+    notes = list(scan_doc.get("notes") or [])
     if args.llm:
         if os.path.exists(args.llm):
             try:

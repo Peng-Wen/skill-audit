@@ -62,6 +62,31 @@ KNOWN_FRONTMATTER_KEYS = {
 
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
+# The directory holding the scanner that is executing right now. Files inside it
+# are excluded from the pattern rules; see is_auditor_own_source().
+SELF_SCRIPTS_DIR = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+
+
+def is_auditor_own_source(path):
+    """True when a file belongs to the scanner that is running right now.
+
+    These scripts spell out, in plain text, the exact strings the scanner hunts
+    for. Scanning them reports the detector's own vocabulary as if it were
+    behavior: the credential paths in CREDENTIAL_PATH_PATTERNS are matched by
+    the credential-path rule, and so on for every table in this file.
+
+    Excluding them gives up nothing. This is the code the user already chose to
+    execute, so a tampered copy would control the report whether or not it
+    scanned itself; a scanner cannot vouch for itself by reading itself.
+
+    The test is identity by resolved path, never by skill name, so any other
+    copy of this skill - a fork, a clone waiting to be vetted, a directory that
+    merely calls itself skill-audit - is scanned in full like anything else.
+    Every excluded file is named in the scan output so the omission is visible.
+    """
+    real = os.path.realpath(path)
+    return real == SELF_SCRIPTS_DIR or real.startswith(SELF_SCRIPTS_DIR + os.sep)
+
 
 def _c(pattern):
     return re.compile(pattern, re.IGNORECASE)
@@ -617,7 +642,7 @@ def check_quality_solo(skill):
 
     tools = raw.get("allowed-tools")
     if tools:
-        entries = tools.split() if isinstance(tools, str) else list(tools)
+        entries = split_tool_list(tools)
         broad = [t for t in entries
                  if t.lower() in ("bash", "shell", "terminal", "execute", "run", "*")]
         if broad:
@@ -628,6 +653,22 @@ def check_quality_solo(skill):
                 detector="deterministic"))
 
     return findings
+
+
+def split_tool_list(tools):
+    """Split an allowed-tools value into individual tool names.
+
+    The field appears both as a YAML list and as a string, and the string form
+    is written both space-separated and comma-separated. Splitting on whitespace
+    alone leaves a trailing comma glued to every name but the last, which made
+    every comma-separated declaration - the common form - slip past the checks
+    below without matching anything.
+    """
+    if isinstance(tools, str):
+        parts = re.split(r"[,\s]+", tools)
+    else:
+        parts = [str(t) for t in tools]
+    return [p.strip().strip("\"'") for p in parts if p.strip().strip("\"'")]
 
 
 def check_binaries(skill):
@@ -811,8 +852,14 @@ def escalate(findings):
 # ---------------------------------------------------------------------------
 
 def scan_inventory(inventory, cap_bytes=DEFAULT_CAP_BYTES, known_names=None):
-    """Run every deterministic rule over an inventory of skills."""
+    """Run every deterministic rule over an inventory of skills.
+
+    Returns (findings, notes). Notes record anything a reader needs in order to
+    judge coverage, such as a file the scan deliberately skipped.
+    """
     findings = []
+    notes = []
+    skipped_self = []
     known_names = known_names if known_names is not None else set()
 
     for skill in inventory["skills"]:
@@ -825,6 +872,9 @@ def scan_inventory(inventory, cap_bytes=DEFAULT_CAP_BYTES, known_names=None):
             if f["kind"] == "binary":
                 continue
             full = os.path.join(skill["path"], f["path_rel"])
+            if is_auditor_own_source(full):
+                skipped_self.append("%s/%s" % (skill["name"], f["path_rel"]))
+                continue
             text, _ = read_text_capped(full, cap_bytes)
             if not text:
                 continue
@@ -845,7 +895,16 @@ def scan_inventory(inventory, cap_bytes=DEFAULT_CAP_BYTES, known_names=None):
         f["file"] or "",
         f["line"] or 0,
     ))
-    return findings
+
+    if skipped_self:
+        notes.append(
+            "pattern rules skipped %d file(s) belonging to the running auditor "
+            "itself, because its rule tables contain the strings it searches for: "
+            "%s. Structural checks still covered them, and any other copy of this "
+            "skill is scanned in full."
+            % (len(skipped_self), ", ".join(sorted(skipped_self))))
+
+    return findings, notes
 
 
 def dedupe(findings):
@@ -893,13 +952,14 @@ def main(argv=None):
     known_names = load_known_skills(known_path)
 
     inventory = load_inventory(args)
-    findings = scan_inventory(inventory, args.cap_bytes, known_names)
+    findings, notes = scan_inventory(inventory, args.cap_bytes, known_names)
     summary = summarize_findings(findings, [s["name"] for s in inventory["skills"]])
 
     write_json(args.out, {
         "source": "deterministic",
         "findings": findings,
         "summary": summary,
+        "notes": notes,
     })
 
     if not args.quiet:
@@ -907,6 +967,8 @@ def main(argv=None):
         print("Scanned %d skill(s). Findings: %d critical, %d high, %d medium, %d low, %d info."
               % (len(inventory["skills"]), totals["critical"], totals["high"],
                  totals["medium"], totals["low"], totals["info"]))
+        for note in notes:
+            print("Note: %s" % note)
         print("Findings written to %s" % args.out)
 
     return 0

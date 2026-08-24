@@ -89,19 +89,44 @@ python3 "$SKILL_DIR/scripts/build_report.py" --scan skill-audit-work/scan_findin
 
 This merges both passes, drops malformed semantic entries and notes that it did so, grades each skill, computes the context cost table, and writes `findings.json` and `report.md`.
 
-Then tell the user, in this order:
+### Phase 5: interactive summary
+
+`report.md` is the record. Most people want to scan the result before they read it, so build the interactive companion too, in the shape the current harness delivers best.
+
+Pick the format by what this harness can actually do, not by its name:
+
+| Harness | Format | How to deliver it |
+| --- | --- | --- |
+| Claude, Claude Code, Claude Cowork | `artifact` | Publish the file as an artifact and give the user the link. |
+| ChatGPT, Codex | `standalone` | Report the file path so the user can open it in a browser. |
+| Anything else | `standalone` | Report the file path so the user can open it in a browser. |
+
+The reliable test is capability: if a tool for publishing an artifact is available in this session, use `artifact`; otherwise use `standalone`.
+
+```
+python3 "$SKILL_DIR/scripts/build_dashboard.py" --findings skill-audit-report/findings.json --inventory skill-audit-work/inventory.json --out skill-audit-report/dashboard.html --format standalone
+```
+
+`--format artifact` writes the same page without the `<!doctype>`, `<html>`, `<head>`, and `<body>` wrapper, for a harness that supplies its own.
+Both shapes are one self-contained file that fetches nothing over the network, and every value from an audited skill is inserted as text rather than as markup, so hostile content in a skill cannot reach the page as HTML.
+
+Do not hand-write this page. The generator escapes untrusted content; retyping its contents into an artifact by hand reintroduces exactly the injection risk the audit exists to find.
+
+### Report back
+
+Tell the user, in this order:
 
 1. The headline: how many skills were audited and how many have critical or high findings.
 2. The graded summary table.
 3. The specific actions worth taking, most severe first, naming the skill and what to do.
 4. The always-on context cost figure, since it applies whether or not any skill is used.
-5. The path to the full report.
+5. Where the output is: the link or path to the interactive summary, and the path to `report.md`.
 
 Report what the audit found, without softening a critical finding and without inflating a low one.
 
 ## Quick scan
 
-When the user wants speed over depth, run phases 1, 2, and 4 and omit `--llm`.
+When the user wants speed over depth, run phases 1, 2, 4, and 5, and omit `--llm`.
 Say in the summary that the semantic pass was skipped, since pattern rules alone miss prose-based manipulation.
 
 ## Interpreting results
@@ -118,6 +143,8 @@ Isolation, governance, and cross-harness permission differences are properties o
 
 ## A note on auditing this skill
 
-This skill's own scripts contain the phrases, paths, and command shapes it searches for, so auditing it will produce findings inside its `scripts/` directory.
-That is expected: the detection strings have to live somewhere.
-Findings in its SKILL.md or references would not be expected, and are worth investigating.
+The scanner does not run its pattern rules over its own executing source, because its rule tables spell out the exact strings it searches for and matching them reports the detector's vocabulary as if it were behavior.
+Every file skipped that way is named in the scan output and in the report, so the omission is visible rather than silent.
+
+The exclusion is by resolved path, never by skill name, and it gives up nothing: this is code the user already chose to run, so a tampered copy would control the report whether or not it scanned itself.
+Any other copy of this skill is audited in full, which is what makes `--skill /path/to/a/downloaded/skill-audit` a real check on a fork rather than a formality.

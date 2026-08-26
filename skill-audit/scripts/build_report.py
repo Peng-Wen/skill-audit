@@ -19,9 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from skill_audit_lib import (  # noqa: E402
     RULES,
     SEVERITIES,
+    build_action_plan,
     build_agent_prompt,
-    build_fix_plan,
-    build_next_steps,
     estimate_tokens,
     local_now,
     read_json,
@@ -210,28 +209,37 @@ def render_report_md(findings, summary, tax, inventory, notes):
             counts["medium"], counts["low"], top_action(skill_findings)))
     lines.append("")
 
-    # Next steps: the decisions, before the evidence that justifies them.
-    steps = build_next_steps(findings, summary)
+    # One action section: the decision a skill needs and the edits that carry
+    # it out are the same work at two zoom levels, so they sit in one entry
+    # rather than in two lists a reader has to cross-reference.
+    plan = build_action_plan(findings, summary)
     lines.append("## Next steps")
     lines.append("")
-    if not steps:
+    if not plan:
         lines.append("Nothing to act on. No skill produced a finding.")
         lines.append("")
     else:
-        lines.append("In order, most severe first.")
+        lines.append("In order, most severe first. Each entry is the decision a skill needs "
+                     "and the changes that carry it out.")
         lines.append("")
-        for i, step in enumerate(steps, 1):
-            lines.append("%d. **%s** (grade %s, %s) - %s %s"
-                         % (i, step["skill"], step["grade"], step["severity"],
-                            step["headline"] + ".", step["action"]))
-        lines.append("")
+        for i, group in enumerate(plan, 1):
+            lines.append("%d. **%s** - grade %s, %d finding(s). %s"
+                         % (i, group["skill"], group["grade"], group["count"],
+                            group["decision"]))
+            for item in group["items"]:
+                lines.append("   - `%s` %s at `%s`: %s"
+                             % (item["rule_id"], item["severity"], item["where"],
+                                item["recommendation"]))
+            lines.append("")
         lines.append("To hand this to an agent, copy the block below. It carries its own "
                      "instruction that the quoted content is data rather than instructions, "
                      "which matters because the evidence comes from the audited skills "
-                     "themselves.")
+                     "themselves. The interactive summary carries the same section with a "
+                     "button that delivers it in one step; Markdown has no button, so here "
+                     "it is a block to copy.")
         lines.append("")
         lines.append("```text")
-        lines.append(build_agent_prompt("next-steps", steps, None, len(skills)).rstrip())
+        lines.append(build_agent_prompt(plan, len(skills)).rstrip())
         lines.append("```")
         lines.append("")
 
@@ -261,35 +269,6 @@ def render_report_md(findings, summary, tax, inventory, notes):
             lines.append("  - Evidence: `%s`" % f["evidence"].replace("`", "'"))
             lines.append("  - Fix: %s" % f["recommendation"])
             lines.append("  - Detected by: %s" % f["detector"])
-        lines.append("")
-
-    # Suggested fixes: the same findings as a work order.
-    plan = build_fix_plan(findings)
-    lines.append("## Suggested fixes")
-    lines.append("")
-    if not plan:
-        lines.append("No fixes needed.")
-        lines.append("")
-    else:
-        lines.append("The change to make for each finding, grouped by skill.")
-        lines.append("")
-        for group in plan:
-            lines.append("**%s**" % group["skill"])
-            lines.append("")
-            for item in group["items"]:
-                lines.append("- `%s` %s at `%s`: %s"
-                             % (item["rule_id"], item["severity"], item["where"],
-                                item["recommendation"]))
-            lines.append("")
-        lines.append("To hand the fix list to an agent, copy the block below.")
-        lines.append("")
-        lines.append("```text")
-        lines.append(build_agent_prompt("fixes", None, plan, len(skills)).rstrip())
-        lines.append("```")
-        lines.append("")
-        lines.append("The interactive summary carries the same two sections with a button "
-                     "that delivers them in one step; Markdown has no button, so here they "
-                     "are blocks to copy.")
         lines.append("")
 
     # Context cost.

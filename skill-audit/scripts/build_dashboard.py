@@ -32,9 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from skill_audit_lib import (  # noqa: E402
     RULES,
     SEVERITIES,
+    build_action_plan,
     build_agent_prompt,
-    build_fix_plan,
-    build_next_steps,
     iso_local_now,
     local_now,
     read_json,
@@ -102,8 +101,7 @@ def build_data(findings_doc, inventory, title):
 
     skills.sort(key=lambda s: (GRADE_ORDER.get(s["grade"], 5), s["name"]))
 
-    steps = build_next_steps(findings, summary)
-    plan = build_fix_plan(findings)
+    plan = build_action_plan(findings, summary)
 
     return {
         "title": title,
@@ -117,12 +115,8 @@ def build_data(findings_doc, inventory, title):
         "skill_count": len(skills),
         "skills": skills,
         "notes": findings_doc.get("notes") or [],
-        "next_steps": steps,
-        "fix_plan": plan,
-        "prompts": {
-            "next-steps": build_agent_prompt("next-steps", steps, None, len(skills)),
-            "fixes": build_agent_prompt("fixes", None, plan, len(skills)),
-        },
+        "action_plan": plan,
+        "prompt": build_agent_prompt(plan, len(skills)),
     }
 
 
@@ -586,39 +580,50 @@ h2 {
   font-variant-numeric: tabular-nums;
 }
 .step .who { font-family: var(--mono); font-weight: 700; font-size: 14px; overflow-wrap: anywhere; }
-.step .what { margin-top: 2px; font-size: 14px; max-width: 76ch; text-wrap: pretty; }
-.step .tagline {
-  margin-top: 5px;
+.step .what { margin-top: 4px; font-size: 14px; max-width: 76ch; text-wrap: pretty; }
+
+.step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; }
+.step-grade, .step-count {
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: .06em;
   text-transform: uppercase;
+  border: 1px solid var(--sev, var(--line));
   color: var(--sev, var(--text-muted));
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
 }
+.step-count { border-color: var(--line); color: var(--text-muted); }
 
-.fixgroups { display: flex; flex-direction: column; gap: 12px; }
-.fixgroup {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--sev, var(--info));
-  border-radius: 6px;
-  padding: 12px 14px;
+.fixes {
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
-.fixgroup h3 {
-  margin: 0 0 8px;
-  font-family: var(--mono);
-  font-size: 14px;
-  font-weight: 700;
-  overflow-wrap: anywhere;
+.fixes li {
+  font-size: 13.5px;
+  max-width: 78ch;
+  text-wrap: pretty;
+  padding-left: 11px;
+  border-left: 2px solid var(--sev, var(--line));
 }
-.fixgroup ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 7px; }
-.fixgroup li { font-size: 14px; max-width: 78ch; text-wrap: pretty; }
-.fixgroup code {
+.fixes code {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11.5px;
   background: var(--surface-sunk);
   border-radius: 4px;
   padding: 1px 5px;
+}
+
+.step-note {
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  color: var(--text-muted);
+  max-width: 76ch;
 }
 
 .prompt-peek { margin-top: 12px; }
@@ -721,6 +726,7 @@ BODY = """
       <span class="send-status" id="status-steps" role="status" aria-live="polite"></span>
     </div>
     <ol class="steps" id="steps"></ol>
+    <p class="step-note" id="step-note"></p>
     <details class="prompt-peek" id="peek-steps">
       <summary>Show the exact text</summary>
       <pre id="prompt-steps"></pre>
@@ -737,19 +743,6 @@ BODY = """
       <span class="count-note" id="count-note"></span>
     </div>
     <div class="roster" id="roster"></div>
-  </section>
-
-  <section aria-labelledby="fixes-h">
-    <div class="section-head">
-      <h2 id="fixes-h">Suggested fixes</h2>
-      <button class="send" id="send-fixes" type="button"></button>
-      <span class="send-status" id="status-fixes" role="status" aria-live="polite"></span>
-    </div>
-    <div class="fixgroups" id="fixgroups"></div>
-    <details class="prompt-peek" id="peek-fixes">
-      <summary>Show the exact text</summary>
-      <pre id="prompt-fixes"></pre>
-    </details>
   </section>
 
   <section aria-labelledby="cost-h">
@@ -1116,8 +1109,8 @@ SCRIPT = r"""
     return Promise.resolve(legacyCopy(text));
   }
 
-  function wireSend(kind, btn, status, peek, pre, hasWork) {
-    pre.textContent = (data.prompts || {})[kind] || "";
+  function wireSend(btn, status, peek, pre, hasWork) {
+    pre.textContent = data.prompt || "";
 
     if (!hasWork) {
       btn.textContent = "Nothing to send";
@@ -1150,58 +1143,51 @@ SCRIPT = r"""
   }
 
   var stepsEl = document.getElementById("steps");
-  var steps = data.next_steps || [];
-  steps.forEach(function (step, i) {
+  var plan = data.action_plan || [];
+  plan.forEach(function (group, i) {
     var li = el("li", "step");
-    li.style.setProperty("--sev", SEV_VAR[step.severity] || "var(--info)");
+    li.style.setProperty("--sev", SEV_VAR[group.severity] || "var(--info)");
     li.appendChild(el("span", "idx", (i + 1) + "."));
+
     var body = el("div");
-    body.appendChild(el("div", "who", step.skill));
-    body.appendChild(el("div", "what", step.headline + ". " + step.action));
-    body.appendChild(el("div", "tagline",
-      step.severity + " · grade " + step.grade + " · " + (step.rules || []).join(", ")));
+    var head = el("div", "step-head");
+    head.appendChild(el("span", "who", group.skill));
+    var grade = el("span", "step-grade", "grade " + group.grade);
+    grade.style.setProperty("--sev", GRADE_VAR[group.grade] || "var(--info)");
+    head.appendChild(grade);
+    head.appendChild(el("span", "step-count", plural(group.count, "finding")));
+    body.appendChild(head);
+
+    body.appendChild(el("div", "what", group.decision));
+
+    var ul = el("ul", "fixes");
+    group.items.forEach(function (item) {
+      var row = document.createElement("li");
+      row.style.setProperty("--sev", SEV_VAR[item.severity] || "var(--info)");
+      row.appendChild(el("code", null, item.rule_id));
+      row.appendChild(document.createTextNode(" " + item.severity + " at "));
+      row.appendChild(el("code", null, item.where));
+      row.appendChild(document.createTextNode(" - " + item.recommendation));
+      ul.appendChild(row);
+    });
+    body.appendChild(ul);
+
     li.appendChild(body);
     stepsEl.appendChild(li);
   });
-  if (!steps.length) {
+  if (!plan.length) {
     stepsEl.parentNode.insertBefore(
       el("p", "nothing-to-do", "No findings, so there is nothing to act on."), stepsEl);
+  } else {
+    document.getElementById("step-note").textContent =
+      "Each entry is the decision a skill needs and the changes that carry it out.";
   }
 
-  var groupsEl = document.getElementById("fixgroups");
-  var plan = data.fix_plan || [];
-  plan.forEach(function (group) {
-    var box = el("div", "fixgroup");
-    box.style.setProperty("--sev", SEV_VAR[group.severity] || "var(--info)");
-    box.appendChild(el("h3", null, group.skill));
-    var ul = document.createElement("ul");
-    group.items.forEach(function (item) {
-      var li = document.createElement("li");
-      li.appendChild(el("code", null, item.rule_id));
-      li.appendChild(document.createTextNode(" " + item.severity + " at "));
-      li.appendChild(el("code", null, item.where));
-      li.appendChild(document.createTextNode(" - " + item.recommendation));
-      ul.appendChild(li);
-    });
-    box.appendChild(ul);
-    groupsEl.appendChild(box);
-  });
-  if (!plan.length) {
-    groupsEl.appendChild(el("p", "nothing-to-do", "No findings, so there is nothing to fix."));
-  }
-
-  wireSend("next-steps",
+  wireSend(
     document.getElementById("send-steps"),
     document.getElementById("status-steps"),
     document.getElementById("peek-steps"),
     document.getElementById("prompt-steps"),
-    steps.length > 0);
-
-  wireSend("fixes",
-    document.getElementById("send-fixes"),
-    document.getElementById("status-fixes"),
-    document.getElementById("peek-fixes"),
-    document.getElementById("prompt-fixes"),
     plan.length > 0);
 
   /* Context cost ------------------------------------------------------ */

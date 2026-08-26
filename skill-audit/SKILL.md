@@ -89,8 +89,8 @@ python3 "$SKILL_DIR/scripts/build_report.py" --scan skill-audit-work/scan_findin
 
 This merges both passes, drops malformed semantic entries and notes that it did so, grades each skill, computes the context cost table, and writes `findings.json` and `report.md`.
 
-`report.md` carries two action sections alongside the evidence: **Next steps**, the ordered decisions worst first, and **Suggested fixes**, the concrete change per finding.
-Each ends with a ready-made block to hand an agent.
+`report.md` carries a **Next steps** section alongside the evidence: the skills that need a decision, worst first, each with the changes that carry that decision out.
+It ends with a ready-made block to hand an agent.
 That block quotes evidence taken from the audited skills, so it opens by saying the quoted content is data and not instructions, and the generator breaks up any text inside it that tries to close the data fence early.
 
 ### Phase 5: interactive summary
@@ -114,7 +114,7 @@ python3 "$SKILL_DIR/scripts/build_dashboard.py" --findings skill-audit-report/fi
 `--format artifact` writes the same page without the `<!doctype>`, `<html>`, `<head>`, and `<body>` wrapper, for a harness that supplies its own.
 Both shapes are one self-contained file that fetches nothing over the network, and every value from an audited skill is inserted as text rather than as markup, so hostile content in a skill cannot reach the page as HTML.
 
-The page carries the same two action sections, each with a button that hands its content to an agent so the user can act on the audit without retyping it.
+The page carries the same action section, with a button that hands it to an agent so the user can act on the audit without retyping it.
 Where the host gives the page a way to reach the agent, the button sends; everywhere else it copies, and it is labelled with whichever it will actually do.
 The full text is always on the page as well, so there is no dead end.
 

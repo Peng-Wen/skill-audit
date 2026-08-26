@@ -1,0 +1,59 @@
+# Installing
+
+## The one-liner
+
+```bash
+npx skills add Peng-Wen/skill-audit
+```
+
+That is the whole install for any harness that reads a standard skills directory.
+
+## By hand
+
+Copy the `skill-audit/` directory into any skills location your harness reads, such as `~/.claude/skills/`, `~/.codex/skills/`, `~/.config/opencode/skills/`, or the shared `~/.agents/skills/`.
+
+Install it at the user level rather than per project, since it audits everything the machine can load:
+
+```bash
+rsync -a --delete --exclude __pycache__ skill-audit/ ~/.claude/skills/skill-audit/
+```
+
+The same command updates an existing installation, and `--delete` removes files dropped since the previous version.
+Running the scripts leaves compiled bytecode in `scripts/__pycache__/`, which `--exclude` also protects from that delete.
+Python never runs bytecode that no longer matches its source, so clearing it after an update is tidiness rather than a correctness fix:
+
+```bash
+find ~/.claude/skills/skill-audit -name __pycache__ -type d -exec rm -rf {} +
+```
+
+## Verifying the installed copy
+
+To confirm the installed copy is the one you meant to install:
+
+```bash
+diff -rq --exclude=__pycache__ skill-audit/ ~/.claude/skills/skill-audit/ && echo "in sync"
+```
+
+The scanner excludes only the copy that is currently executing, and it decides that by resolved path rather than by name.
+So you can point it at any other copy, including a fork you are thinking about installing, and get a real audit rather than a formality:
+
+```bash
+python3 skill-audit/scripts/scan_skill.py --skill ~/Downloads/some-skill-audit-fork --out findings.json
+```
+
+## Requirements
+
+`python3`, which the bundled scripts use with the standard library only.
+There is nothing else to install, and the scripts make no network requests.
+
+If `python3` is unavailable, the skill falls back to a documented manual procedure and states plainly in the report that the deterministic scan was skipped, because manual review covers less than the scanner does.
+
+## Where it looks for skills
+
+By default, every user, project, and plugin skills directory used by the mainstream harnesses.
+The full table of paths, and how to override the search with `--paths` or `SKILL_AUDIT_PATHS`, is in [harnesses.md](../skill-audit/references/harnesses.md).
+
+## Once it is installed
+
+The skill audits itself along with everything else, and grades A against its own rules.
+Why the scanner skips the pattern rules for the copy that is executing, and what stops that from being a loophole, is covered in [How it works](how-it-works.md#auditing-this-skill).

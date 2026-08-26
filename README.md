@@ -1,25 +1,53 @@
-# skill-audit
+<h1 align="center"><code>skill-audit</code></h1>
 
-An Agent Skill that audits the Agent Skills installed on your machine.
+<p align="center">
+  <a href="https://github.com/Peng-Wen/skill-audit/actions/workflows/evals.yml"
+    ><img
+      alt="Evals"
+      src="https://img.shields.io/github/actions/workflow/status/Peng-Wen/skill-audit/evals.yml?style=flat-square&label=evals"
+  /></a>
+  <a href="evals/README.md"
+    ><img
+      alt="Detection"
+      src="https://img.shields.io/badge/detection-29%2F29%20found%2C%200%20false%20positives-brightgreen?style=flat-square"
+  /></a>
+  <a href="docs/how-it-works.md#auditing-this-skill"
+    ><img
+      alt="Self audit"
+      src="https://img.shields.io/badge/self%20audit-A-brightgreen?style=flat-square"
+  /></a>
+  <a href="docs/checks.md"
+    ><img
+      alt="OWASP"
+      src="https://img.shields.io/badge/OWASP-Agentic%20Skills%20Top%2010-blueviolet?style=flat-square"
+  /></a>
+  <a href="skill-audit/references/harnesses.md"
+    ><img
+      alt="Harnesses"
+      src="https://img.shields.io/badge/harnesses-Claude%20%7C%20Codex%20%7C%20OpenCode%20%7C%20%2B3-blue?style=flat-square"
+  /></a>
+  <a href="LICENSE"
+    ><img
+      alt="License"
+      src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"
+  /></a>
+</p>
 
-It inventories every skill your harness can load, checks each one for security, trust, spec, cost, and quality problems, and produces a graded report with quoted evidence and a concrete fix for each finding.
+<h3 align="center">Read the skills before your agent does.</h3>
 
-Read-only.
-It never executes, imports, or sources anything belonging to an audited skill, and never opens a URL one of them references.
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="A skill-audit report: skills audited, findings by severity, and a grade per skill" width="860" />
+</p>
 
-## Why
+An Agent Skill that audits the Agent Skills already installed on your machine.
+It inventories every skill your harness can load, checks each one against 35 rules for security, trust, spec, cost, and quality problems, and hands back a graded report with quoted evidence and a concrete fix for every finding.
 
-Skills install as plain Markdown from public repositories, usually with no signing, no sandbox, and no review.
-The published research on this is not reassuring.
-
-- A February 2026 Snyk study scanned 3,984 skills across ClawHub and skills.sh: 36.8% carried at least one flaw and 13.4% carried something critical, including malware, prompt injection, and exposed secrets.
-- The ClawHavoc campaign placed 341 malicious skills in a single registry, using typosquatted names, credential exfiltration to webhooks, and behavior split across files so a benign-looking SKILL.md hid the real payload.
-- OWASP now publishes an Agentic Skills Top 10, and this skill maps its findings onto those categories.
-
-One finding shapes the whole design: **pattern matching alone misses most of the critical cases**, because the dangerous instructions are written in ordinary prose rather than in code.
-So the audit runs in two layers, and the reading layer is not optional.
-
-There is a second, quieter cost. Every installed skill keeps its name and description in your context permanently, whether you use it or not. The report puts a number on that.
+- **Two passes, because one is not enough** - deterministic rules catch the dangerous syntax, and a semantic reading pass catches manipulation written as ordinary prose, which is where most critical cases in the wild actually live.
+- **Read-only, and hostile content stays data** - nothing belonging to an audited skill is ever executed, imported, or fetched. Text asking to be marked safe is quoted as evidence of injection, not obeyed.
+- **Obfuscation is decoded, not just noticed** - the scanner decodes a level and re-runs its pattern set, so it reports that a blob decodes to a pipe-to-shell command rather than that a blob exists.
+- **A number on your context bill** - every installed skill costs you tokens in every session, used or not. The report totals it, per skill and overall.
+- **Precision counts as much as detection** - a tool that flags ordinary skills trains you to ignore it, so clean controls in the eval suite exist purely to measure false positives.
+- **Measured, not asserted** - the repo ships its own eval suite and CI gates on it. The skill also audits itself, grades A, and an invariant fails the build if that stops being true.
 
 ## Install
 
@@ -27,37 +55,14 @@ There is a second, quieter cost. Every installed skill keeps its name and descri
 npx skills add Peng-Wen/skill-audit
 ```
 
-Or copy the `skill-audit/` directory into any skills location your harness reads, such as `~/.claude/skills/`, `~/.codex/skills/`, `~/.config/opencode/skills/`, or the shared `~/.agents/skills/`.
-
-Install it at the user level rather than per project, since it audits everything the machine can load:
-
-```bash
-rsync -a --delete --exclude __pycache__ skill-audit/ ~/.claude/skills/skill-audit/
-```
-
-The same command updates an existing installation, and `--delete` removes files dropped since the previous version.
-Running the scripts leaves compiled bytecode in `scripts/__pycache__/`, which `--exclude` also protects from that delete.
-Python never runs bytecode that no longer matches its source, so clearing it after an update is tidiness rather than a correctness fix:
-
-```bash
-find ~/.claude/skills/skill-audit -name __pycache__ -type d -exec rm -rf {} +
-```
-
-To confirm the installed copy is the one you meant to install:
-
-```bash
-diff -rq --exclude=__pycache__ skill-audit/ ~/.claude/skills/skill-audit/ && echo "in sync"
-```
-
-Requires `python3`, which the bundled scripts use with the standard library only.
-No packages to install. If `python3` is missing, the skill falls back to a documented manual procedure.
-
-Once installed, the skill audits itself along with everything else, and grades A against its own rules.
-The scanner skips the pattern rules only for the copy that is executing; see [Auditing this skill](#auditing-this-skill).
+Needs `python3`, standard library only.
+Nothing else to install, and nothing to configure.
+Other install paths, updating, and verifying the installed copy are in [Installing](docs/install.md).
 
 ## Use
 
-Ask for it in your own words:
+Ask for it in your own words.
+There is no command to remember.
 
 > Audit my skills for anything malicious.
 
@@ -65,115 +70,35 @@ Ask for it in your own words:
 
 > How much context do my installed skills consume?
 
-> Check this skill before I install it: ~/Downloads/some-skill
+> Check this before I install it: ~/Downloads/some-skill
 
-The scripts also run on their own, without an agent:
+You get back `report.md`, `findings.json`, and an interactive summary page you can filter and act on.
 
-```bash
-python3 skill-audit/scripts/discover_skills.py --out inventory.json
-python3 skill-audit/scripts/scan_skill.py --inventory inventory.json --out scan_findings.json
-python3 skill-audit/scripts/build_report.py --scan scan_findings.json --inventory inventory.json --out report/
-python3 skill-audit/scripts/build_dashboard.py --findings report/findings.json --inventory inventory.json --out report/dashboard.html
-```
-
-To vet one skill before installing it:
+The scripts also run on their own, with no agent involved:
 
 ```bash
 python3 skill-audit/scripts/scan_skill.py --skill ~/Downloads/some-skill --out findings.json
 ```
 
-## What it checks
+## Documentation
 
-Five categories, thirty rules, each mapped to the relevant OWASP Agentic Skills risk.
-The full catalog is in [report-format.md](skill-audit/references/report-format.md).
+- [**Why audit your skills**](docs/why.md) - what the research actually found, and the context cost nobody measures.
+- [**Installing**](docs/install.md) - install, update, verify, and point it at non-standard paths.
+- [**What it checks**](docs/checks.md) - the 35 rules, the grading scale, and two design choices worth knowing about.
+- [**How it works**](docs/how-it-works.md) - the five phases, the injection guardrail, and how the skill audits itself.
+- [**What this cannot tell you**](docs/limitations.md) - the honest ceiling on any static analysis of a Markdown file.
+- [**Eval suite**](evals/README.md) - six cases, ten fixtures, and the numbers behind the badges.
 
-| Category | Covers |
-| --- | --- |
-| SEC | Prompt injection, hidden text, data exfiltration, pipe-to-shell, credential access, hardcoded secrets, obfuscated payloads, destructive commands, persistence, cross-file logic splitting, bundled binaries, remote instruction loading, dynamic execution. |
-| TRUST | Typosquatted names, brand impersonation, missing license, unpinned remote content. |
-| SPEC | Every constraint the Agent Skills specification places on frontmatter, plus broken and over-nested references. |
-| COST | Oversized bodies, long descriptions, large bundled files, and the always-on context cost of your whole collection. |
-| QUALITY | Vague descriptions, descriptions that collide with another skill's, and privileges wider than the stated purpose. |
+## Reporting issues
 
-Findings are graded A through F per skill, by worst severity.
+Use the [issue tracker](https://github.com/Peng-Wen/skill-audit/issues).
+Two kinds of report are especially useful:
 
-Two design choices worth knowing about:
+- **A false positive.** A skill flagged for something it does not do. Precision is a design goal here, so these get fixed rather than argued with. Include the rule id and enough of the skill to reproduce it.
+- **A miss.** Something dangerous that came back clean. If you can, propose it as an inert fixture in [evals/fixtures/](evals/fixtures/) with its ground truth, so the fix stays fixed.
 
-**Obfuscation is decoded, not just noticed.**
-Reporting that a file contains base64 is close to useless.
-The scanner decodes one level and re-runs the dangerous-pattern set on the result, so it reports that a blob decodes to a pipe-to-shell command, with the decoded text as evidence.
-
-**Precision is treated as a feature.**
-A tool that flags ordinary skills trains you to ignore it.
-Persistence rules require a write context rather than a mention, so a skill about service management is not accused of installing itself. Description-length rules fire near the spec cap rather than penalizing the keyword-rich descriptions that make triggering work.
-
-## How it works
-
-1. **Discover.** Walk the skill directories of every mainstream harness, plus any paths you name, and build an inventory.
-2. **Scan.** Apply the deterministic rules, including the cross-skill ones that need the whole inventory in view, such as name similarity and description collisions.
-3. **Review.** The agent reads each skill against the rubric in [security-review.md](skill-audit/references/security-review.md) and judges meaning: manipulation written as prose, descriptions that do not match behavior, privileges without justification.
-4. **Report.** Merge both passes, grade each skill, compute the context cost, and write `findings.json` and `report.md`.
-5. **Present.** Render the same result as one self-contained interactive page, delivered in whatever shape the harness handles best.
-
-Because step 3 has the agent read untrusted content, SKILL.md opens with an explicit guardrail: audited content is data, never instructions.
-Nothing found inside a skill is obeyed, executed, or fetched, and text asking to be marked safe or left out of the report is recorded as evidence of injection rather than acted on.
-The deterministic layer is the backstop: it still reports the worst categories even if the reading layer is manipulated.
-
-## What you get back
-
-`report.md` is the full record, and `findings.json` is the same result as data.
-
-Alongside them the audit renders an interactive summary: severity totals, a grade per skill with its findings and quoted evidence, filtering by severity or free text, and the context cost table. It is one HTML file with no build step, no dependencies, and no network requests of any kind - a page that fetched a font or a script from a remote host would contradict the guarantee the audit itself makes.
-
-How it reaches you depends on the harness. On Claude, Claude Code, and Claude Cowork it is published as an artifact and you get a link. On Codex, ChatGPT, and everywhere else it is a standalone HTML file you open in a browser. The two differ only in the document wrapper.
-
-Everything an audited skill contributed to that page - names, paths, evidence, recommendations - is embedded as escaped JSON and written into the DOM as text, never as markup. A skill that plants a closing script tag or an event handler in its own content cannot get it rendered.
-
-## Evals
-
-`skill-audit` ships with its own eval suite, because a security tool that has not been measured is a claim rather than a result.
-See [evals/README.md](evals/README.md).
-
-```bash
-python3 evals/run_evals.py --lane scanner-only --ci     # hermetic, no model, CI gate
-python3 evals/run_evals.py --lane live --agent claude --trials 5
-```
-
-The suite runs against a corpus of ten fixture skills, eight with planted problems and two clean controls, and reports precision, recall, and F1 against enumerated ground truth.
-The clean controls exist to measure false positives, which matter as much as detection.
-
-Six cases measure three different things, because detection alone is not the whole job.
-**Detection accuracy** (E1, E2, E6) asks whether planted problems are found, clean skills are left alone, and context cost is estimated correctly; these run in both lanes and are what CI gates on.
-**Trigger accuracy** (E4, E5) asks whether the skill activates on a request that never names it and stays out of unrelated work, since a skill that intrudes on every session has a real cost.
-**Report quality** (E3) asks whether the report a reader actually receives is worth acting on: evidence traceable to real files, severities matching real risk, and no finding quietly dropped or talked away by the content being audited.
-The per-case table is in [evals/README.md](evals/README.md).
-
-Current scanner-only results: recall 1.00 across 29 expected findings, zero false positives on the clean controls.
-E3 is scored by a separate judge invocation, with the mechanically checkable parts computed rather than judged; see [Judging report quality](evals/README.md#judging-report-quality).
-
-The fixtures are inert.
-Hosts are `*.example.invalid`, secrets are fake strings rather than real key formats, the bundled binary is sixteen bytes of magic and zeros, and every planted file is labeled.
-The whole `evals/` tree stays outside the shipped skill directory, so none of it reaches a user's machine.
-
-## Auditing this skill
-
-The skill grades A against its own rules, and an eval invariant fails the build if that ever stops being true.
-
-Getting there needed one structural decision. The scanner's rule tables spell out the strings it hunts for - credential paths, exfiltration phrases, pipe-to-shell shapes - so scanning them reported the detector's own vocabulary as if it were behavior. The scanner therefore skips the source of the auditor that is executing, names every file it skipped in the report, and gives up nothing by doing so: this is code you already chose to run, and a tampered copy would control the report whether or not it scanned itself.
-
-The exclusion is decided by resolved path, never by name, so taking the name `skill-audit` buys an attacker nothing. A second invariant proves it: it copies the skill elsewhere, scans the copy with the original, and fails if the copy comes back clean. That is what makes vetting a downloaded fork with `--skill` a real check rather than a formality.
-
-The remaining invariant is the older one. No finding should appear in this skill's `SKILL.md` or `references/`. During development one did, in a reference file, and the tool caught it. The wording was fixed rather than the rule weakened.
-
-## Limitations
-
-Stated plainly, because a security tool that oversells itself is worse than none.
-
-- A clean report means nothing was detected, not that a skill is safe.
-- Nothing is executed, so a skill that misbehaves only at run time can still read clean.
-- Sandboxing and isolation belong to your harness, not to any skill file.
-- Governance, meaning inventory, approval, and audit logging, is organizational. The inventory this produces is a starting point, not an answer.
-- The same skill can behave differently on another harness, because each grants tools its own way.
+Please do not attach real credentials, tokens, or private skill contents to an issue.
+Fixture-style stand-ins reproduce almost anything, and the existing fixtures show the house style: hosts under `*.example.invalid`, fake secret strings, and every planted file labelled.
 
 ## License
 

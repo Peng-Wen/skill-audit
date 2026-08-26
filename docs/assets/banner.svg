@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 570" width="1200" height="570" role="img" aria-labelledby="t d" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">skill-audit</title>
+  <desc id="d">A stylized skill-audit report: 18 skills audited, 2 critical and 5 high findings, 41.2k tokens always loaded, and a graded table of skills ending with skill-audit grading itself an A.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B111E"/>
+      <stop offset="1" stop-color="#131D30"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#60A5FA" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#60A5FA" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#60A5FA" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="570" rx="22" fill="url(#bg)"/>
+  <rect x="0.5" y="0.5" width="1199" height="569" rx="21.5" fill="none" stroke="#22304A"/>
+
+  <!-- mark: a document under a magnifier -->
+  <g>
+    <rect x="48" y="38" width="26" height="32" rx="6" fill="#16233A" stroke="#31456A" stroke-width="1.5"/>
+    <path d="M55 48h13M55 55h9" stroke="#31456A" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="70" cy="60" r="10.5" fill="#0B111E" fill-opacity="0.92" stroke="#60A5FA" stroke-width="2.6"/>
+    <path d="M77.6 67.6 84 74" stroke="#60A5FA" stroke-width="3.2" stroke-linecap="round"/>
+  </g>
+
+  <text x="100" y="66" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="27" font-weight="700" fill="#E8EEF9" letter-spacing="-0.4">skill-audit</text>
+  <text x="1152" y="63" text-anchor="end" font-size="15" fill="#8FA3BF">read-only &#183; nothing executed &#183; nothing fetched</text>
+
+  <rect x="48" y="103.5" width="1104" height="1.5" fill="url(#sheen)"/>
+
+  <!-- headline numbers -->
+  <g>
+    <rect x="48" y="132" width="258" height="94" rx="13" fill="#101A2B" stroke="#1F2D46"/>
+    <text x="70" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="34" font-weight="700" fill="#E8EEF9">18</text>
+    <text x="70" y="207" font-size="14" fill="#8FA3BF">skills audited</text>
+
+    <rect x="330" y="132" width="258" height="94" rx="13" fill="#101A2B" stroke="#1F2D46"/>
+    <text x="352" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="34" font-weight="700" fill="#F87171">2</text>
+    <text x="352" y="207" font-size="14" fill="#8FA3BF">critical</text>
+
+    <rect x="612" y="132" width="258" height="94" rx="13" fill="#101A2B" stroke="#1F2D46"/>
+    <text x="634" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="34" font-weight="700" fill="#FB923C">5</text>
+    <text x="634" y="207" font-size="14" fill="#8FA3BF">high</text>
+
+    <rect x="894" y="132" width="258" height="94" rx="13" fill="#101A2B" stroke="#1F2D46"/>
+    <text x="916" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="34" font-weight="700" fill="#E8EEF9">41.2k</text>
+    <text x="916" y="207" font-size="14" fill="#8FA3BF">tokens always loaded</text>
+  </g>
+
+  <!-- graded table -->
+  <g font-size="12" font-weight="700" fill="#64748B" letter-spacing="1.4">
+    <text x="48" y="262">SKILL</text>
+    <text x="300" y="262">WHAT THE AUDIT FOUND</text>
+    <text x="1126" y="262" text-anchor="middle">GRADE</text>
+  </g>
+
+  <g>
+    <rect x="48" y="282" width="1104" height="1" fill="#1A2740"/>
+    <text x="48" y="316" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" fill="#E8EEF9">dcox</text>
+    <text x="300" y="316" font-size="16" fill="#94A6C0">typosquats docx, then posts your files to a webhook</text>
+    <rect x="1100" y="292" width="52" height="32" rx="9" fill="#F87171" fill-opacity="0.14" stroke="#F87171" stroke-opacity="0.5"/>
+    <text x="1126" y="315" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700" fill="#F87171">F</text>
+
+    <rect x="48" y="338" width="1104" height="1" fill="#1A2740"/>
+    <text x="48" y="372" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" fill="#E8EEF9">repo-sync</text>
+    <text x="300" y="372" font-size="16" fill="#94A6C0">reads ~/.aws/credentials, which its description never mentions</text>
+    <rect x="1100" y="348" width="52" height="32" rx="9" fill="#FB923C" fill-opacity="0.14" stroke="#FB923C" stroke-opacity="0.5"/>
+    <text x="1126" y="371" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700" fill="#FB923C">D</text>
+
+    <rect x="48" y="394" width="1104" height="1" fill="#1A2740"/>
+    <text x="48" y="428" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" fill="#E8EEF9">notes-helper</text>
+    <text x="300" y="428" font-size="16" fill="#94A6C0">burns 18k tokens of context for a three-line job</text>
+    <rect x="1100" y="404" width="52" height="32" rx="9" fill="#FBBF24" fill-opacity="0.14" stroke="#FBBF24" stroke-opacity="0.5"/>
+    <text x="1126" y="427" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700" fill="#FBBF24">C</text>
+
+    <rect x="48" y="450" width="1104" height="1" fill="#1A2740"/>
+    <text x="48" y="484" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" fill="#E8EEF9">skill-audit</text>
+    <text x="300" y="484" font-size="16" fill="#94A6C0">audits itself under the same rules, and earns it</text>
+    <rect x="1100" y="460" width="52" height="32" rx="9" fill="#34D399" fill-opacity="0.14" stroke="#34D399" stroke-opacity="0.5"/>
+    <text x="1126" y="483" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700" fill="#34D399">A</text>
+    <rect x="48" y="506" width="1104" height="1" fill="#1A2740"/>
+  </g>
+
+  <text x="48" y="538" font-size="14" fill="#64748B">35 rules &#183; 5 categories &#183; mapped to the OWASP Agentic Skills Top 10</text>
+  <text x="1152" y="538" text-anchor="end" font-size="14" fill="#64748B">grades A to F, worst finding wins</text>
+</svg>

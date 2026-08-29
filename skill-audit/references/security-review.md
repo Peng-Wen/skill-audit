@@ -97,7 +97,8 @@ The reading pass is also where a deterministic finding gets corrected.
 The scanner grades from structure alone, so it will sometimes flag a benign construct: a scoped cleanup delete, a documented dangerous command a skill warns against, a broad permission a service task actually needs.
 When the surrounding context makes a finding clearly benign, adjudicate it instead of leaving it to stand.
 
-- Point the adjudication at the specific finding by rule, skill, and where possible file and line.
+- Point the adjudication at one specific finding by rule, skill, file, and line.
+  An adjudication whose selectors match several findings is refused, so write one per finding rather than one that sweeps a rule.
 - Use `resolve` when the finding does not describe a real risk at all, and `downgrade` with a lower severity when it overstates one.
 - Always give the reason from the evidence. An adjudication is a claim about the skill exactly as a finding is, and it is held to the same evidence standard.
 

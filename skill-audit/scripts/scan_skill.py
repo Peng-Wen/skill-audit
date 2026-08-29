@@ -197,10 +197,34 @@ CREDENTIAL_PATH_PATTERNS = [
 # Reading a .env file is the weakest credential signal: it is also how apps
 # load ordinary configuration, so it reports at medium rather than the rule's
 # high default, and escalation still lifts it when the same file sends data
-# out. Lines that handle the checked-in template variants are the standard
-# project-bootstrap idiom and are not findings at all.
-ENV_READ_RE = _c(r"(?:cat|cp|mv|curl|open|read|send|upload|source|exfil\w*)\b[^\n]{0,40}\.env\b")
-ENV_TEMPLATE_RE = _c(r"\.env\.(?:example|sample|template|dist|defaults?|local\.example)")
+# out. The checked-in template variants are the standard project-bootstrap
+# idiom and are not findings at all.
+ENV_PATH_RE = _c(r"\.env\b")
+ENV_READ_VERB_RE = _c(r"(?:cat|cp|mv|curl|open|read|send|upload|source|exfil\w*)\b")
+ENV_TEMPLATE_SUFFIX_RE = _c(r"\.(?:example|sample|template|dist|defaults?|local\.example)\b")
+ENV_VERB_WINDOW = 40
+
+
+def env_read_match(line):
+    """Match a read of a real environment file on this line, or return None.
+
+    The template exemption is decided per path rather than per line, and a
+    verb binds to the nearest path that follows it. Copying a checked-in
+    template into place therefore stays the bootstrap idiom it is, while a
+    line that opens the real file and merely mentions a template further
+    along is still reported: naming a template somewhere else on the line
+    cannot excuse reading the secrets next to it.
+    """
+    prev_end = 0
+    for m in ENV_PATH_RE.finditer(line):
+        window = line[max(prev_end, m.start() - ENV_VERB_WINDOW):m.start()]
+        prev_end = m.end()
+        if ENV_TEMPLATE_SUFFIX_RE.match(line, m.end()):
+            continue
+        if ENV_READ_VERB_RE.search(window):
+            return m
+    return None
+
 
 SECRET_ASSIGN_PATTERNS = [
     _c(r"(?:api[_-]?key|secret|token|password|passwd|access[_-]?key)"
@@ -220,7 +244,11 @@ DESTRUCTIVE_PATTERNS = [
 # legitimate skills perform, while the same flags pointed at the home
 # directory or the filesystem root destroy the machine. Flags are checked as
 # a set, so both -rf and -fr count.
-RM_RE = _c(r"\b(?:sudo\s+)?rm\s+(?P<flags>(?:-[A-Za-z]+\s+)+)(?P<target>[^\s;|&)`]+)?")
+# The end-of-options marker is consumed rather than captured. Writing it
+# before the path is a conventional spelling of the whole-disk delete, and
+# capturing the marker as the target would grade that as relative cleanup.
+RM_RE = _c(r"\b(?:sudo\s+)?rm\s+(?P<flags>(?:-[A-Za-z]+\s+)+)(?:--\s+)?"
+           r"(?P<target>[^\s;|&)`]+)?")
 
 _TMPISH_PREFIXES = (
     "/tmp", "/var/tmp", "/private/tmp", "/dev/shm",
@@ -228,32 +256,40 @@ _TMPISH_PREFIXES = (
 )
 
 
-def rm_severity(line):
-    """Return the severity of a recursive force delete on this line, or None.
+def rm_judgement(line):
+    """Grade a recursive force delete on this line. Returns (severity, match).
 
     critical: the filesystem root or the home directory itself.
     high:     an absolute path, or a path rooted in the home directory.
     low:      a relative path, a temp location, or a target the scan cannot
               resolve, such as a shell variable. The reading pass re-judges
               these with the surrounding context in view.
+
+    The match comes back with the severity because the advisory test needs
+    to know where on the line the command starts.
     """
     m = RM_RE.search(line)
     if not m:
-        return None
+        return None, None
     flags = (m.group("flags") or "").lower()
     if "r" not in flags or "f" not in flags:
-        return None
+        return None, None
     target = (m.group("target") or "").strip("\"'")
     root = target.rstrip("/*")
     if target.startswith("/") and root == "":
-        return "critical"
+        return "critical", m
     if root in ("~", "$HOME", "${HOME}"):
-        return "critical"
+        return "critical", m
     if target.startswith(("~/", "$HOME/", "${HOME}/")):
-        return "high"
+        return "high", m
     if target.startswith("/") and not target.lower().startswith(_TMPISH_PREFIXES):
-        return "high"
-    return "low"
+        return "high", m
+    return "low", m
+
+
+def rm_severity(line):
+    """The severity of a recursive force delete on this line, or None."""
+    return rm_judgement(line)[0]
 
 
 # Lines that clearly talk ABOUT a dangerous command rather than issuing it:
@@ -271,9 +307,11 @@ ADVISORY_CUE_RE = _c(
 # higher and a planted cue word must not be able to mute them.
 ADVISORY_RULES = {"SEC004", "SEC008", "SEC013"}
 
+# Whole-machine destruction, which escalate() lifts to critical. Recursive
+# deletes are not listed here: rm_judgement already grades them by target, so
+# flag order and the end-of-options marker stay handled in one place instead
+# of in a second set of regexes that can drift out of step with the first.
 HOME_WIPE_PATTERNS = [
-    _c(r"rm\s+-[a-z]*r[a-z]*f[a-z]*\s+(?:/|~|\$HOME|\$\{HOME\})(?:\s|/?$|/\*)"),
-    _c(r"rm\s+-[a-z]*f[a-z]*r[a-z]*\s+(?:/|~|\$HOME|\$\{HOME\})(?:\s|/?$|/\*)"),
     _c(r"\bdd\s+[^\n]*of=/dev/"),
     _c(r"\bmkfs(?:\.\w+)?\s"),
 ]
@@ -372,9 +410,29 @@ def _snippet(line):
 # Per-file text rules.
 # ---------------------------------------------------------------------------
 
-def _advisory_downgrade(finding, line):
+def _advisory_cue_precedes(line, match_start):
+    """True when an advisory cue introduces the command matched at match_start.
+
+    Prose that warns against a command, and a rule that blocks one, both read
+    left to right: the cue comes first, and the command it describes follows.
+    A cue appended after the command describes nothing, so a whole-disk delete
+    with a warning word in its trailing comment keeps its full severity.
+    Accepting a cue anywhere on the line would hand every payload a one-word
+    way to mute its own finding, and since escalation leaves info findings
+    alone, that would silence the backstop as well.
+    """
+    if match_start is None:
+        return False
+    for m in ADVISORY_CUE_RE.finditer(line):
+        if m.end() <= match_start:
+            return True
+    return False
+
+
+def _advisory_downgrade(finding, line, match_start):
     """Record a prose-context match at info instead of its full severity."""
-    if finding["rule_id"] in ADVISORY_RULES and ADVISORY_CUE_RE.search(line):
+    if finding["rule_id"] in ADVISORY_RULES \
+            and _advisory_cue_precedes(line, match_start):
         finding["severity"] = "info"
         finding["evidence"] = "advisory or defensive context: " + finding["evidence"]
     return finding
@@ -387,7 +445,8 @@ def scan_text_rules(skill, rel_path, text):
     name = skill["name"]
     sid = skill["id"]
 
-    def add(rule_id, lineno, line, severity=None, recommendation=None):
+    def add(rule_id, lineno, line, match_start, severity=None,
+            recommendation=None):
         key = (rule_id, rel_path)
         if counts.get(key, 0) >= MAX_FINDINGS_PER_RULE_PER_FILE:
             return
@@ -395,33 +454,37 @@ def scan_text_rules(skill, rel_path, text):
         findings.append(_advisory_downgrade(make_finding(
             rule_id, name, sid, rel_path, lineno, _snippet(line),
             detector="deterministic", severity=severity,
-            recommendation=recommendation), line))
+            recommendation=recommendation), line, match_start))
 
     lines = text.split("\n")
     for lineno, line in enumerate(lines, start=1):
         if not line.strip():
             continue
         for rule_id, patterns in LINE_RULES:
-            if _matches_any(patterns, line):
-                add(rule_id, lineno, line)
+            hit = _matches_any(patterns, line)
+            if hit:
+                add(rule_id, lineno, line, hit.start())
 
-        # Recursive force deletes are graded by target; see rm_severity.
-        rm_sev = rm_severity(line)
+        # Recursive force deletes are graded by target; see rm_judgement.
+        rm_sev, rm_hit = rm_judgement(line)
         if rm_sev:
-            add("SEC008", lineno, line, severity=rm_sev)
+            add("SEC008", lineno, line, rm_hit.start(), severity=rm_sev)
 
         # Reading .env files: the template variants are the bootstrap idiom.
-        if ENV_READ_RE.search(line) and not ENV_TEMPLATE_RE.search(line):
-            add("SEC005", lineno, line, severity="medium")
+        env_hit = env_read_match(line)
+        if env_hit:
+            add("SEC005", lineno, line, env_hit.start(), severity="medium")
 
         # A netcat send is a channel, not proof; escalation pairs it with
         # credential access when both sit in one file.
-        if NC_SEND_RE.search(line):
-            add("SEC003", lineno, line, severity="medium")
+        nc_hit = NC_SEND_RE.search(line)
+        if nc_hit:
+            add("SEC003", lineno, line, nc_hit.start(), severity="medium")
 
         # Collection endpoints are a finding even without a send verb.
-        if _matches_any(EXFIL_HOST_PATTERNS, line):
-            add("SEC003", lineno, line,
+        host_hit = _matches_any(EXFIL_HOST_PATTERNS, line)
+        if host_hit:
+            add("SEC003", lineno, line, host_hit.start(),
                 recommendation="Remove the reference to this collection endpoint. "
                                "Skills must not send local data to outside hosts.")
 
@@ -974,7 +1037,11 @@ def escalate(findings):
     """Raise severities where several signals in one file reinforce each other."""
     by_file = {}
     for f in findings:
-        by_file.setdefault((f["skill"], f["file"]), []).append(f)
+        # Keyed by skill_id rather than display name: two same-name skills in
+        # different scopes are different skills, and pooling their findings
+        # would let one skill's credential read escalate the other's channel.
+        by_file.setdefault((f.get("skill_id") or f["skill"], f["file"]),
+                           []).append(f)
 
     for (_, _), group in by_file.items():
         rules = {f["rule_id"] for f in group}
@@ -996,7 +1063,8 @@ def escalate(findings):
 
     for f in findings:
         if f["rule_id"] == "SEC008" and f["severity"] != "info" \
-                and _matches_any(HOME_WIPE_PATTERNS, f["evidence"]):
+                and (_matches_any(HOME_WIPE_PATTERNS, f["evidence"])
+                     or rm_severity(f["evidence"]) == "critical"):
             f["severity"] = "critical"
         elif f["rule_id"] == "SEC013" and f["severity"] != "info" \
                 and INTERPOLATION_HINT.search(f["evidence"]):

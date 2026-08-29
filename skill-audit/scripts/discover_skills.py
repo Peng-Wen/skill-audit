@@ -343,13 +343,22 @@ def build_inventory(search_paths):
 
     # Ids must be unique even when two distinct skills share a directory name
     # across scopes, or every consumer keyed by id pools them into one entry.
-    # The sort above is deterministic, so the suffix is stable across runs.
-    seen_ids = {}
+    # Counting per base name is not enough: directory names are attacker
+    # controlled and invalid ones stay in the inventory, so a directory
+    # literally named "foo::2" could claim the suffixed id minted for the
+    # second "foo". Each candidate is therefore checked against the ids
+    # already issued. The sort above is deterministic, so the result is
+    # stable across runs.
+    used_ids = set()
     for s in skills:
         base = "%s::%s" % (s["harness"], s["name"])
-        n = seen_ids.get(base, 0) + 1
-        seen_ids[base] = n
-        s["id"] = base if n == 1 else "%s::%d" % (base, n)
+        candidate = base
+        n = 1
+        while candidate in used_ids:
+            n += 1
+            candidate = "%s::%d" % (base, n)
+        used_ids.add(candidate)
+        s["id"] = candidate
 
     return {
         "host": {

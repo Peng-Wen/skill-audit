@@ -242,13 +242,25 @@ def apply_adjudications(findings, adjudications, resolve):
         if adj.get("file"):
             targets = [f for f in targets if f.get("file") == adj["file"]]
         if adj.get("line"):
-            targets = [f for f in targets
-                       if f.get("line") in (adj["line"], None)]
+            targets = [f for f in targets if f.get("line") == adj["line"]]
         targets = [f for f in targets if f.get("status") != "resolved"]
         if not targets:
             notes.append(
                 "dropped an adjudication: no deterministic %s finding on %s "
                 "matches it" % (adj["rule_id"], adj["skill"]))
+            continue
+        if len(targets) > 1:
+            # One judgement, one finding. The same rule can fire on a benign
+            # line and a genuinely dangerous one in the same skill, so a
+            # selector that matches both would let the benign judgement carry
+            # the dangerous finding out of the grade with it.
+            notes.append(
+                "refused an adjudication: %s on %s matches %d deterministic "
+                "findings (%s); name one with file and line"
+                % (adj["rule_id"], adj["skill"], len(targets),
+                   ", ".join(sorted(
+                       "%s:%s" % (f.get("file") or "SKILL.md", f.get("line"))
+                       for f in targets))))
             continue
         for f in targets:
             where = f.get("file") or "SKILL.md"

@@ -142,12 +142,16 @@ grading the skill forever.
 
 Each adjudication is an object:
 
-- `rule_id`, `skill` (or `skill_id`), and optional `file` and `line` to select
-  which deterministic finding it applies to.
+- `rule_id`, `skill` (or `skill_id`), and `file` and `line` to select which
+  deterministic finding it applies to.
 - `verdict`: `"downgrade"` or `"resolve"`.
 - `severity`: the new, lower severity, required for a `downgrade`.
 - `reason`: why, required. An adjudication without a reason is dropped.
 - `evidence`: optional supporting quote.
+
+An adjudication has to name exactly one finding.
+`file` and `line` may be left out when the rule fired once for that skill, but if the selectors match more than one finding the adjudication is refused rather than applied to all of them: the same rule fires on a benign line and on a dangerous one in the same skill often enough that a broad selector would carry a real finding out of the grade alongside the false positive.
+Adjudicate each line separately when several need it.
 
 Only deterministic findings can be adjudicated, a downgrade must actually
 lower the severity, and every application, refusal, and drop is written to

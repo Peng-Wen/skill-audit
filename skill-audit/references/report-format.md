@@ -29,7 +29,7 @@ Produced by `scripts/discover_skills.py`.
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "generated_at": "2026-08-21T00:00:00Z",
   "host": {"os": "darwin", "python": "3.13.0"},
   "search_paths": [
@@ -54,7 +54,12 @@ Produced by `scripts/discover_skills.py`.
 }
 ```
 
-`scope` is one of `user`, `project`, `plugin`, `override`, or `explicit`.
+`scope` is one of `user`, `project`, `plugin`, `system`, `override`, or `explicit`.
+
+`id` is `harness::name`, and is the stable key every later stage groups by. When
+two discovered skills would produce the same id, the later one in the
+deterministic sort order gets a numeric suffix (`harness::name::2`) so distinct
+skills never collapse into one entry.
 
 ## findings.json
 
@@ -63,7 +68,7 @@ Only `source` and `detector` differ.
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "generated_at": "2026-08-21T00:00:00Z",
   "source": "deterministic",
   "findings": [
@@ -83,32 +88,76 @@ Only `source` and `detector` differ.
     }
   ],
   "summary": {
-    "by_skill": {"example-skill": {"grade": "D", "counts": {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0}}},
+    "by_skill": {"claude::example-skill": {"name": "example-skill", "grade": "D", "counts": {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0}, "resolved": 0}},
     "by_category": {"SEC": 1},
     "totals": {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0}
   }
 }
 ```
 
+`summary.by_skill` is keyed by `skill_id`, not by name, because two installed
+skills can legitimately share a directory name across scopes and pooling them
+under one name would let a clean skill inherit another's grade. Each entry
+carries the display `name` and a `resolved` count of findings an adjudication
+took out of grading.
+
+A merged finding may also carry, when the semantic review adjudicated it:
+
+- `status`: `"resolved"` when the review judged it benign and took it out of
+  grading. The finding stays in the document; it just no longer counts.
+- `original_severity`: the severity before a downgrade or resolution.
+- `resolution`: `{"verdict", "reason", "evidence"}`, the recorded justification.
+
+Nothing is suppressed silently. An adjudicated finding is still present, still
+shows its original severity, and every adjudication is echoed in `notes`.
+
 ### Writing semantic findings
 
-The semantic review writes `llm_findings.json` in exactly this shape with `"source": "llm"` and `"detector": "llm"` on each entry.
+The semantic review writes `llm_findings.json` with `"source": "llm"`, a
+`findings` list, and an optional `adjudications` list. Each finding carries
+`"detector": "llm"`.
 
 Requirements, because `build_report.py` validates every entry and drops the ones that do not conform:
 
 - `rule_id` has to be one of the ids in the catalog below.
 - `severity` has to be one of the five levels above.
-- `skill` has to match the `name` of a skill in the inventory.
-- `evidence` has to quote or closely paraphrase the actual file content that triggered the finding, so a reader can verify it.
+- `skill` has to match the `name` of a skill in the inventory. When a name is
+  shared across scopes it is ambiguous, so give `skill_id` instead; a name or
+  id that is not in the inventory is dropped rather than turned into a phantom
+  report row.
+- `evidence` has to quote or closely paraphrase the actual file content that triggered the finding, so a reader can verify it. Whitespace is normalized on load.
 - `file` and `line` are optional but make a finding far more useful.
 - Set `confidence` to `high`, `medium`, or `low` to reflect how certain the judgment is.
 
 Dropped entries are recorded in the report's notes, so a malformed finding is visible rather than silent.
 
+### Adjudicating a deterministic finding
+
+The scanner reports structure and cannot weigh context; the reading pass can.
+When the review judges a deterministic finding benign, it says so in the
+`adjudications` list rather than staying silent, and the finding is lowered or
+resolved with the reason on record. This is the visible resolution channel for
+a false positive: without it, a finding the review knows is wrong would keep
+grading the skill forever.
+
+Each adjudication is an object:
+
+- `rule_id`, `skill` (or `skill_id`), and optional `file` and `line` to select
+  which deterministic finding it applies to.
+- `verdict`: `"downgrade"` or `"resolve"`.
+- `severity`: the new, lower severity, required for a `downgrade`.
+- `reason`: why, required. An adjudication without a reason is dropped.
+- `evidence`: optional supporting quote.
+
+Only deterministic findings can be adjudicated, a downgrade must actually
+lower the severity, and every application, refusal, and drop is written to
+`notes`. A `resolve` sets `status: "resolved"` so the finding stops grading
+but stays in the report.
+
 ## notes
 
 Both `scan_findings.json` and the merged `findings.json` carry a `notes` list, and `report.md` prints it under "Method and limitations".
-Notes record anything a reader needs in order to judge coverage rather than risk: a semantic entry that was dropped, a missing semantic findings file, or a file the scan deliberately skipped.
+Notes record anything a reader needs in order to judge coverage rather than risk: a semantic entry that was dropped, a semantic adjudication that lowered or resolved a finding, an adjudication that was refused or dropped, a missing semantic findings file, or a file the scan deliberately skipped.
 
 The scan skips one category of file: the source of the auditor that is executing.
 Its rule tables contain the literal strings it searches for, so scanning them would report the detector's own vocabulary as findings.
@@ -153,12 +202,12 @@ Detector column values: `det` means the deterministic scanner finds it, `llm` me
 | SEC002 | high, critical when the hidden text gives orders | det | Content concealed from a human reader, in comments or through invisible characters. |
 | SEC003 | critical | det+llm | Local data sent to an outside host, including collection endpoints and chat webhooks. |
 | SEC004 | critical | det | Remote content downloaded and executed in a single step. |
-| SEC005 | high, critical alongside a send or execute finding | det | Reads of credential stores, private keys, or environment secret files. |
+| SEC005 | high, medium for a plain `.env` read, critical alongside a send or execute finding | det | Reads of credential stores, private keys, or environment secret files. Reading a checked-in template such as `.env.example` is the bootstrap idiom and is not flagged. |
 | SEC006 | medium, high for a recognizable provider key | det | A secret value written directly into the skill's files. |
 | SEC007 | medium, critical when the decoded content is dangerous | det | Encoded content that hides what the skill actually does. |
-| SEC008 | high, critical for a root or home wipe | det | Commands that destroy data or force-overwrite history. |
+| SEC008 | graded by target: critical for a root or home wipe, high for another absolute or home-rooted path, low for a scratch or relative target, info in advisory or defensive prose | det | Commands that destroy data or force-overwrite history. Both `-rf` and `-fr` flag orders count. A line that argues against such a command, or blocks or warns about it, is advisory context and drops to info. |
 | SEC009 | high | det | Changes that make something run outside the current task, such as startup files, scheduled jobs, or hooks. |
-| SEC010 | medium, high alongside manipulation | det+llm | Instructions aimed at the agent placed outside SKILL.md, so a reviewer reading only SKILL.md misses them. |
+| SEC010 | medium, high alongside manipulation | det+llm | Instructions aimed at the agent placed outside SKILL.md, so a reviewer reading only SKILL.md misses them. The deterministic rule fires only when the file also carries another security signal or injection phrasing, since second-person imperatives alone are ordinary reference-file style. |
 | SEC011 | medium, high alongside network activity | det | A compiled executable bundled with the skill instead of readable source. |
 | SEC012 | high | det+llm | Behavior fetched from a remote source at run time, which can change after review. |
 | SEC013 | medium, high with interpolated input | det | Dynamic evaluation of code or shell strings. |
@@ -184,7 +233,7 @@ Detector column values: `det` means the deterministic scanner finds it, `llm` me
 | SPEC006 | low | det | `compatibility` exceeds 500 characters. |
 | SPEC007 | low | det | `metadata` is not a flat map of strings to strings. |
 | SPEC008 | low, medium when the target is missing | det | A relative reference is broken or nested more than one level deep. |
-| SPEC009 | info | det | A frontmatter key outside the spec, often a misspelling that the harness ignores without warning. |
+| SPEC009 | info | det | A frontmatter key outside the portable spec. A recognized harness extension (such as `argument-hint` or `user-invocable`) is reported as harness-specific rather than as a misspelling; a genuinely unknown key is flagged as one the harness ignores without warning. |
 | SPEC010 | low | det | `allowed-tools` is malformed. |
 
 ### COST: context economy

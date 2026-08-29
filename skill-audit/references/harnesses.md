@@ -9,13 +9,21 @@ User level, applying to every project:
 
 | Harness | Path |
 | --- | --- |
-| Claude Code | `~/.claude/skills` |
-| Codex | `~/.codex/skills` |
+| Claude Code | `$CLAUDE_CONFIG_DIR/skills`, default `~/.claude/skills` |
+| Codex | `$CODEX_HOME/skills`, default `~/.codex/skills` |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/skills`, usually `~/.config/opencode/skills` |
-| Shared convention | `~/.agents/skills` |
+| Shared convention | `~/.agents/skills`, plus `$XDG_CONFIG_HOME/agents/skills` (where the skills CLI installs its global scope) |
 | OpenClaw | `~/.claw/skills` |
 | Gemini CLI | `~/.gemini/skills` |
 | Cursor | `~/.cursor/skills` |
+
+When `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set, the default location is searched as well as the override: skills installed before a move can still sit there, and an audit should surface them rather than assume the move was clean.
+
+System level:
+
+| Harness | Path |
+| --- | --- |
+| Codex | `/etc/codex/skills`, the administrator-managed location Codex documents |
 
 Project level, relative to the working directory:
 
@@ -26,13 +34,25 @@ Project level, relative to the working directory:
 | OpenCode | `.opencode/skills` |
 | Shared convention | `.agents/skills` |
 | Cursor | `.cursor/skills` |
-| Generic | `skills/` |
+| Generic | `skills/` (checked in the working directory only) |
+
+The dot-prefixed project directories are also checked in every parent of the working directory up to the repository root.
+Codex documents exactly that scan for `.agents/skills`, and a skill sitting in any parent loads for whoever launches there, so the audit walks the same span.
+Ancestor entries appear in the search-path list only when the directory exists, and the walk stops at the repository root, the home directory, or ten levels, whichever comes first.
 
 Plugin bundles:
 
 | Harness | Path |
 | --- | --- |
-| Claude Code | `~/.claude/plugins/<plugin>/skills` |
+| Claude Code | `~/.claude/plugins` (walked in full) |
+
+The Claude Code plugin cache has carried several layouts, and a marketplace
+plugin nests its skills several directories down, at
+`~/.claude/plugins/marketplaces/<marketplace>/plugins/<plugin>/skills/<skill>`,
+with external plugins under an `external_plugins/` sibling. Rather than encode
+one shape, the audit walks the whole `~/.claude/plugins` root and reports every
+skill it finds there, including cached-but-disabled plugins: the cache is what
+the harness loads from, so a skill sitting in it is one toggle away from live.
 
 ## Overriding the search
 
@@ -43,7 +63,9 @@ Two overrides exist, both useful for auditing something that is not installed ye
 
 ## Why several harnesses share directories
 
-Many harnesses read `.claude/skills` in addition to their own directory, because the Agent Skills format started there and a large body of skills already lives at that path.
+Many harnesses read more than their own directory.
+OpenCode documents that it also loads `.claude/skills`, `~/.claude/skills`, `.agents/skills`, and `~/.agents/skills`, and Codex's current documentation centers on the shared `.agents/skills` convention rather than a private directory.
+The Agent Skills format started under `.claude/skills`, so a large body of skills lives at that path whatever harness reads it.
 The audit deduplicates by resolved real path, so a skill reachable from several harnesses is inventoried once rather than repeatedly.
 Symbolic links between harness directories are common and resolve to the same entry for the same reason.
 

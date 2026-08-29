@@ -23,10 +23,13 @@ So it does not report "encoded blob found"; it reports that a blob decodes to a 
 
 **Precision is treated as a feature.**
 A tool that flags ordinary skills trains you to ignore it, and an ignored security tool is worse than none.
+Destructive-command severity is graded by target, so wiping the filesystem root is critical while clearing a scratch directory is low, and a line that warns against a dangerous command drops to info instead of being mistaken for it.
 Persistence rules require a write context rather than a mention, so a skill about managing services is not accused of installing itself.
+Reading a checked-in `.env.example` template is treated as the bootstrap idiom it is, not as credential access.
 Description-length rules fire near the specification cap rather than penalizing the keyword-rich descriptions that make triggering work in the first place.
+And where structure alone still misreads a skill, the reading pass can adjudicate a finding down, on the record, so a known false positive stops grading a skill without being hidden.
 
-That is a claim the repo has to back up, so two of the ten eval fixtures are clean controls whose only job is to catch false positives.
+That is a claim the repo has to back up, so five of the thirteen eval fixtures are clean controls whose only job is to catch false positives, three of them built from the real-world idioms above.
 See [evals/README.md](../evals/README.md).
 
 ## What a rule cannot see

@@ -31,6 +31,8 @@ from skill_audit_lib import (  # noqa: E402
 
 REQUIRED_FINDING_KEYS = ("rule_id", "severity", "skill", "evidence")
 
+ADJUDICATION_VERDICTS = ("downgrade", "resolve")
+
 GRADE_MEANING = {
     "A": "no findings",
     "B": "minor issues only",
@@ -40,13 +42,49 @@ GRADE_MEANING = {
 }
 
 
-def validate_llm_finding(entry):
+def build_skill_resolver(inventory):
+    """Map a semantic entry onto exactly one inventory skill.
+
+    Names can legitimately collide across scopes, so an ambiguous name is an
+    error rather than a guess, and a name outside the inventory is rejected:
+    accepting it would let a hallucinated name conjure a graded report row.
+    With no inventory at all there is nothing to check against, and names
+    pass through as their own ids.
+    """
+    skills = inventory.get("skills") or []
+    by_id = {s["id"]: s for s in skills}
+    by_name = {}
+    for s in skills:
+        by_name.setdefault(s["name"], []).append(s)
+
+    def resolve(entry):
+        """Return (skill_id, display_name, error_or_None)."""
+        sid = entry.get("skill_id")
+        if sid:
+            if sid in by_id:
+                return sid, by_id[sid]["name"], None
+            return None, None, "skill_id '%s' is not in the inventory" % sid
+        name = entry.get("skill")
+        matches = by_name.get(name) or []
+        if len(matches) == 1:
+            return matches[0]["id"], name, None
+        if not skills:
+            return name, name, None
+        if not matches:
+            return None, None, "skill '%s' is not in the inventory" % name
+        return None, None, ("skill name '%s' matches %d installed skills; "
+                            "give skill_id" % (name, len(matches)))
+
+    return resolve
+
+
+def validate_llm_finding(entry, resolve):
     """Check one semantic finding. Returns (normalized_entry, error_or_None).
 
     The semantic pass is written by an agent reading untrusted content, so its
     output is validated rather than trusted: unknown rule ids, bad severities,
-    and missing fields are dropped and reported instead of flowing into the
-    report.
+    missing fields, and skills outside the inventory are dropped and reported
+    instead of flowing into the report.
     """
     if not isinstance(entry, dict):
         return None, "entry is not an object"
@@ -58,17 +96,22 @@ def validate_llm_finding(entry):
         return None, "unknown rule_id '%s'" % rule_id
     if entry["severity"] not in SEVERITIES:
         return None, "invalid severity '%s' for %s" % (entry["severity"], rule_id)
+    skill_id, skill_name, error = resolve(entry)
+    if error:
+        return None, error
 
     meta = RULES[rule_id]
     normalized = {
         "rule_id": rule_id,
         "category": meta["category"],
         "severity": entry["severity"],
-        "skill": entry["skill"],
-        "skill_id": entry.get("skill_id"),
+        "skill": skill_name,
+        "skill_id": skill_id,
         "file": entry.get("file"),
         "line": entry.get("line"),
-        "evidence": str(entry["evidence"])[:240],
+        # Evidence lands inside Markdown structure and prompts, so newlines
+        # are collapsed here the same way the scanner collapses its own.
+        "evidence": " ".join(str(entry["evidence"]).split())[:240],
         "recommendation": entry.get("recommendation") or meta["recommendation"],
         "detector": "llm",
         "owasp": list(meta["owasp"]),
@@ -77,30 +120,34 @@ def validate_llm_finding(entry):
     return normalized, None
 
 
-def merge(scan_findings, llm_findings):
+def merge(scan_findings, llm_findings, resolve):
     """Combine the two passes, keeping the more severe view of any duplicate."""
     merged = []
     notes = []
     index = {}
 
+    def key_of(f):
+        return (f["rule_id"], f.get("skill_id") or f.get("skill"),
+                f.get("file"), f.get("line"))
+
     for f in scan_findings:
-        key = (f["rule_id"], f["skill"], f.get("file"), f.get("line"))
-        index[key] = f
+        index[key_of(f)] = f
         merged.append(f)
 
     for raw in llm_findings:
-        entry, error = validate_llm_finding(raw)
+        entry, error = validate_llm_finding(raw, resolve)
         if error:
             notes.append("dropped a semantic finding: %s" % error)
             continue
-        key = (entry["rule_id"], entry["skill"], entry.get("file"), entry.get("line"))
+        key = key_of(entry)
         existing = index.get(key)
         if existing is None and entry.get("line"):
             # The scanner reports some rules at file level, with no line. When
             # the semantic pass reaches the same conclusion about the same rule
             # and file and happens to cite a line, that is the same finding
             # seen twice, not two findings.
-            existing = index.get((entry["rule_id"], entry["skill"], entry.get("file"), None))
+            existing = index.get((entry["rule_id"], entry["skill_id"],
+                                  entry.get("file"), None))
         if existing:
             if severity_rank(entry["severity"]) > severity_rank(existing["severity"]):
                 existing["severity"] = entry["severity"]
@@ -123,13 +170,116 @@ def merge(scan_findings, llm_findings):
         merged.append(entry)
 
     merged.sort(key=lambda f: (
-        f["skill"],
+        f.get("skill_id") or f["skill"],
         -severity_rank(f["severity"]),
         f["rule_id"],
         f.get("file") or "",
         f.get("line") or 0,
     ))
     return merged, notes
+
+
+def validate_adjudication(adj, resolve):
+    """Check one adjudication. Returns (normalized, error_or_None).
+
+    An adjudication is the semantic pass lowering or resolving a deterministic
+    finding it judged benign, with the reason on record. It is validated as
+    strictly as a finding, because it subtracts from the report.
+    """
+    if not isinstance(adj, dict):
+        return None, "entry is not an object"
+    rule_id = adj.get("rule_id")
+    if rule_id not in RULES:
+        return None, "unknown rule_id '%s'" % rule_id
+    verdict = adj.get("verdict")
+    if verdict not in ADJUDICATION_VERDICTS:
+        return None, "verdict must be one of %s" % ", ".join(ADJUDICATION_VERDICTS)
+    reason = " ".join(str(adj.get("reason") or "").split())
+    if not reason:
+        return None, "an adjudication without a reason is dropped; state why"
+    severity = adj.get("severity")
+    if verdict == "downgrade" and severity not in SEVERITIES:
+        return None, "downgrade of %s needs a valid target severity" % rule_id
+    skill_id, skill_name, error = resolve(adj)
+    if error:
+        return None, error
+    return {
+        "rule_id": rule_id,
+        "skill_id": skill_id,
+        "skill": skill_name,
+        "file": adj.get("file"),
+        "line": adj.get("line"),
+        "verdict": verdict,
+        "severity": severity,
+        "reason": reason[:400],
+        "evidence": " ".join(str(adj.get("evidence") or "").split())[:240],
+    }, None
+
+
+def apply_adjudications(findings, adjudications, resolve):
+    """Apply semantic adjudications to the merged findings. Returns notes.
+
+    Every application, skip, and drop lands in the notes: a finding that
+    stops grading must be visible as exactly that, never silently gone. Only
+    deterministic findings are eligible, since the semantic pass has no
+    business adjudicating its own output, and a downgrade must actually go
+    down, or it is refused.
+    """
+    notes = []
+    by_key = {}
+    for f in findings:
+        if "deterministic" not in (f.get("detector") or ""):
+            continue
+        by_key.setdefault((f["rule_id"], f.get("skill_id") or f.get("skill")),
+                          []).append(f)
+
+    for raw in adjudications or []:
+        adj, error = validate_adjudication(raw, resolve)
+        if error:
+            notes.append("dropped an adjudication: %s" % error)
+            continue
+        targets = by_key.get((adj["rule_id"], adj["skill_id"]), [])
+        if adj.get("file"):
+            targets = [f for f in targets if f.get("file") == adj["file"]]
+        if adj.get("line"):
+            targets = [f for f in targets
+                       if f.get("line") in (adj["line"], None)]
+        targets = [f for f in targets if f.get("status") != "resolved"]
+        if not targets:
+            notes.append(
+                "dropped an adjudication: no deterministic %s finding on %s "
+                "matches it" % (adj["rule_id"], adj["skill"]))
+            continue
+        for f in targets:
+            where = f.get("file") or "SKILL.md"
+            if f.get("line"):
+                where = "%s:%s" % (where, f["line"])
+            if adj["verdict"] == "downgrade":
+                if severity_rank(adj["severity"]) >= severity_rank(f["severity"]):
+                    notes.append(
+                        "refused an adjudication: %s on %s at %s is %s and a "
+                        "downgrade to %s does not lower it"
+                        % (adj["rule_id"], adj["skill"], where, f["severity"],
+                           adj["severity"]))
+                    continue
+                f["original_severity"] = f["severity"]
+                f["severity"] = adj["severity"]
+                action = "downgraded to %s" % adj["severity"]
+            else:
+                f["original_severity"] = f["severity"]
+                f["status"] = "resolved"
+                action = "resolved"
+            f["resolution"] = {
+                "verdict": adj["verdict"],
+                "reason": adj["reason"],
+                "evidence": adj["evidence"],
+            }
+            notes.append(
+                "adjudicated by the semantic review: %s %s on %s at %s, "
+                "originally %s: %s"
+                % (adj["rule_id"], action, adj["skill"], where,
+                   f["original_severity"], adj["reason"]))
+    return notes
 
 
 def context_tax(inventory):
@@ -147,6 +297,7 @@ def context_tax(inventory):
         always_on = estimate_tokens(metadata_text)
         always_on_total += always_on
         rows.append({
+            "skill_id": skill["id"],
             "skill": skill["name"],
             "harness": skill["harness"],
             "always_on_tokens": always_on,
@@ -163,9 +314,10 @@ def context_tax(inventory):
 
 def top_action(findings_for_skill):
     """Pick the single most useful next step for a skill."""
-    if not findings_for_skill:
+    active = [f for f in findings_for_skill if f.get("status") != "resolved"]
+    if not active:
         return "none"
-    worst = max(findings_for_skill, key=lambda f: severity_rank(f["severity"]))
+    worst = max(active, key=lambda f: severity_rank(f["severity"]))
     return RULES.get(worst["rule_id"], {}).get("title", worst["rule_id"])
 
 
@@ -194,25 +346,45 @@ def render_report_md(findings, summary, tax, inventory, notes):
     lines.append("| Skill | Harness | Grade | Critical | High | Medium | Low | Top issue |")
     lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
 
-    by_name = {s["name"]: s for s in skills}
+    by_id = {s["id"]: s for s in skills}
     grade_order = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4}
     entries = sorted(
         summary["by_skill"].items(),
-        key=lambda kv: (grade_order.get(kv[1]["grade"], 5), kv[0]))
+        key=lambda kv: (grade_order.get(kv[1]["grade"], 5),
+                        kv[1].get("name") or kv[0], kv[0]))
 
-    for name, info in entries:
+    # Two skills may share a name across scopes; where that happens the scope
+    # disambiguates the row.
+    name_counts = {}
+    for _, info in entries:
+        n = info.get("name") or ""
+        name_counts[n] = name_counts.get(n, 0) + 1
+
+    def display_name(sid, info):
+        name = info.get("name") or sid
+        if name_counts.get(name, 0) > 1:
+            scope = by_id.get(sid, {}).get("scope")
+            if scope:
+                return "%s (%s)" % (name, scope)
+        return name
+
+    def findings_of(sid):
+        return [f for f in findings if (f.get("skill_id") or f.get("skill")) == sid]
+
+    for sid, info in entries:
         counts = info["counts"]
-        skill_findings = [f for f in findings if f["skill"] == name]
-        harness = by_name.get(name, {}).get("harness", "unknown")
+        harness = by_id.get(sid, {}).get("harness", "unknown")
         lines.append("| %s | %s | %s | %d | %d | %d | %d | %s |" % (
-            name, harness, info["grade"], counts["critical"], counts["high"],
-            counts["medium"], counts["low"], top_action(skill_findings)))
+            display_name(sid, info), harness, info["grade"], counts["critical"],
+            counts["high"], counts["medium"], counts["low"],
+            top_action(findings_of(sid))))
     lines.append("")
 
     # One action section: the decision a skill needs and the edits that carry
     # it out are the same work at two zoom levels, so they sit in one entry
     # rather than in two lists a reader has to cross-reference.
-    plan = build_action_plan(findings, summary)
+    plan = build_action_plan(findings, summary,
+                             {s["id"]: s.get("path") for s in skills})
     lines.append("## Next steps")
     lines.append("")
     if not plan:
@@ -226,6 +398,8 @@ def render_report_md(findings, summary, tax, inventory, notes):
             lines.append("%d. **%s** - grade %s, %d finding(s). %s"
                          % (i, group["skill"], group["grade"], group["count"],
                             group["decision"]))
+            if group.get("path"):
+                lines.append("   - Location: `%s`" % group["path"])
             for item in group["items"]:
                 lines.append("   - `%s` %s at `%s`: %s"
                              % (item["rule_id"], item["severity"], item["where"],
@@ -246,10 +420,10 @@ def render_report_md(findings, summary, tax, inventory, notes):
     # Per-skill detail.
     lines.append("## Findings by skill")
     lines.append("")
-    for name, info in entries:
-        skill_findings = [f for f in findings if f["skill"] == name]
-        skill = by_name.get(name, {})
-        lines.append("### %s (grade %s)" % (name, info["grade"]))
+    for sid, info in entries:
+        skill_findings = findings_of(sid)
+        skill = by_id.get(sid, {})
+        lines.append("### %s (grade %s)" % (display_name(sid, info), info["grade"]))
         lines.append("")
         if skill.get("path"):
             lines.append("Location: `%s`" % skill["path"])
@@ -263,12 +437,24 @@ def render_report_md(findings, summary, tax, inventory, notes):
             if f.get("line"):
                 where = "%s:%s" % (where, f["line"])
             owasp = (" [%s]" % ", ".join(f["owasp"])) if f.get("owasp") else ""
+            title = RULES.get(f["rule_id"], {}).get("title", "")
+            resolution = f.get("resolution") or {}
+            if f.get("status") == "resolved":
+                lines.append("- **RESOLVED %s** (%s)%s at `%s`"
+                             % (f["rule_id"], title, owasp, where))
+                lines.append("  - Evidence: `%s`" % f["evidence"].replace("`", "'"))
+                lines.append("  - Resolved by the semantic review, originally %s: %s"
+                             % (f.get("original_severity", "?"),
+                                resolution.get("reason", "")))
+                continue
             lines.append("- **%s %s** (%s)%s at `%s`"
-                         % (f["severity"].upper(), f["rule_id"],
-                            RULES.get(f["rule_id"], {}).get("title", ""), owasp, where))
+                         % (f["severity"].upper(), f["rule_id"], title, owasp, where))
             lines.append("  - Evidence: `%s`" % f["evidence"].replace("`", "'"))
             lines.append("  - Fix: %s" % f["recommendation"])
             lines.append("  - Detected by: %s" % f["detector"])
+            if f.get("original_severity"):
+                lines.append("  - Adjudicated down from %s by the semantic review: %s"
+                             % (f["original_severity"], resolution.get("reason", "")))
         lines.append("")
 
     # Context cost.
@@ -302,6 +488,12 @@ def render_report_md(findings, summary, tax, inventory, notes):
     lines.append("This audit combines deterministic pattern and structure rules with a "
                  "semantic review pass, because pattern matching alone misses instructions "
                  "written in ordinary prose.")
+    lines.append("")
+    lines.append("The semantic pass can also adjudicate a deterministic finding it judged "
+                 "benign, lowering its severity or resolving it. Nothing is suppressed "
+                 "silently: an adjudicated finding stays in this report with its original "
+                 "severity and the recorded reason, and every adjudication is listed in "
+                 "the notes below.")
     lines.append("")
     lines.append("Known limits of this report:")
     lines.append("")
@@ -342,7 +534,8 @@ def print_terminal_summary(findings, summary, tax, out_dir):
     totals = summary["totals"]
     grade_order = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4}
     entries = sorted(summary["by_skill"].items(),
-                     key=lambda kv: (grade_order.get(kv[1]["grade"], 5), kv[0]))
+                     key=lambda kv: (grade_order.get(kv[1]["grade"], 5),
+                                     kv[1].get("name") or kv[0], kv[0]))
 
     print("")
     print("Skill audit: %d critical, %d high, %d medium, %d low, %d info"
@@ -350,8 +543,10 @@ def print_terminal_summary(findings, summary, tax, out_dir):
              totals["low"], totals["info"]))
     print("")
     print("%-32s %-6s %s" % ("SKILL", "GRADE", "TOP ISSUE"))
-    for name, info in entries:
-        skill_findings = [f for f in findings if f["skill"] == name]
+    for sid, info in entries:
+        name = info.get("name") or sid
+        skill_findings = [f for f in findings
+                          if (f.get("skill_id") or f.get("skill")) == sid]
         print("%-32s %-6s %s" % (name[:32], info["grade"], top_action(skill_findings)))
     print("")
     print("Always-on context cost of installed skills: about %d tokens."
@@ -373,6 +568,7 @@ def main(argv=None):
     scan_findings = scan_doc.get("findings", [])
 
     llm_findings = []
+    llm_adjudications = []
     # Notes from the scan come first: they describe the coverage the rest of
     # the report rests on, such as any file the scan deliberately skipped.
     notes = list(scan_doc.get("notes") or [])
@@ -380,10 +576,17 @@ def main(argv=None):
         if os.path.exists(args.llm):
             try:
                 llm_doc = read_json(args.llm)
-                llm_findings = llm_doc.get("findings", []) if isinstance(llm_doc, dict) else llm_doc
+                if isinstance(llm_doc, dict):
+                    llm_findings = llm_doc.get("findings", [])
+                    llm_adjudications = llm_doc.get("adjudications", [])
+                else:
+                    llm_findings = llm_doc
                 if not isinstance(llm_findings, list):
                     notes.append("semantic findings file did not contain a findings list")
                     llm_findings = []
+                if not isinstance(llm_adjudications, list):
+                    notes.append("semantic adjudications were not a list and were ignored")
+                    llm_adjudications = []
             except ValueError as exc:
                 notes.append("semantic findings file was not valid JSON: %s" % exc)
         else:
@@ -391,11 +594,15 @@ def main(argv=None):
                          "scan only" % args.llm)
 
     inventory = read_json(args.inventory) if args.inventory else {"skills": [], "search_paths": []}
+    resolve = build_skill_resolver(inventory)
 
-    findings, merge_notes = merge(scan_findings, llm_findings)
+    findings, merge_notes = merge(scan_findings, llm_findings, resolve)
     notes.extend(merge_notes)
+    notes.extend(apply_adjudications(findings, llm_adjudications, resolve))
 
-    summary = summarize_findings(findings, [s["name"] for s in inventory.get("skills", [])])
+    summary = summarize_findings(
+        findings,
+        [{"id": s["id"], "name": s["name"]} for s in inventory.get("skills", [])])
     tax = context_tax(inventory)
 
     os.makedirs(args.out, exist_ok=True)

@@ -33,6 +33,7 @@ from skill_audit_lib import (  # noqa: E402
     osa_distance,
     read_json,
     read_text_capped,
+    severity_rank,
     summarize_findings,
     typosquat_threshold,
     write_json,
@@ -58,6 +59,16 @@ NAME_LIMIT = 64
 
 KNOWN_FRONTMATTER_KEYS = {
     "name", "description", "license", "compatibility", "metadata", "allowed-tools",
+}
+
+# Frontmatter keys that are not in the portable Agent Skills spec but are
+# documented or widely used harness extensions with real effects on the
+# harness that defines them. Telling users to remove these would break
+# working behavior, so they get accurate wording instead of the misspelling
+# warning reserved for genuinely unknown keys.
+HARNESS_FRONTMATTER_KEYS = {
+    "argument-hint", "disable-model-invocation", "user-invocable", "model",
+    "context", "agent", "hooks", "version", "tools",
 }
 
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -136,9 +147,15 @@ EXFIL_SEND_PATTERNS = [
     _c(r"requests\.(?:post|put|patch)\s*\("),
     _c(r"fetch\s*\([^\n]*method\s*:\s*[\"']POST"),
     _c(r"urlopen\s*\([^\n]*data\s*="),
-    _c(r"\bnc\s+(?:-\w+\s+)*[\w.\-]+\s+\d+"),
 ]
 
+# A bare netcat send is a channel, not proof of exfiltration: metrics examples
+# use the same shape. It reports at medium, and escalation below raises it to
+# critical when the same file also reaches credential material.
+NC_SEND_RE = _c(r"\bnc\s+(?:-\w+\s+)*[\w.\-]+\s+\d+")
+
+# Known out-of-band collection and callback services seen in real payloads.
+# Naming one of these is a finding even without an explicit send verb.
 EXFIL_HOST_PATTERNS = [
     _c(r"webhook\.site"),
     _c(r"hooks\.slack\.com/services"),
@@ -146,7 +163,12 @@ EXFIL_HOST_PATTERNS = [
     _c(r"pastebin\.com"),
     _c(r"requestb(?:in|ucket)"),
     _c(r"\.ngrok(?:-free)?\.(?:io|app)"),
-    _c(r"\bcollector\.[\w.\-]*example\.invalid"),
+    _c(r"\boast\.(?:pro|live|site|online|fun|me)\b"),
+    _c(r"oastify\.com"),
+    _c(r"burpcollaborator\.net"),
+    _c(r"interact\.sh|interactsh\.com"),
+    _c(r"\.m\.pipedream\.net"),
+    _c(r"api\.telegram\.org/bot"),
 ]
 
 URL_RE = _c(r"https?://[^\s\"'<>)\]]+")
@@ -170,8 +192,15 @@ CREDENTIAL_PATH_PATTERNS = [
     _c(r"login\.keychain"),
     _c(r"~?/?\.claude\.json\b"),
     _c(r"~?/?\.config/gcloud/[\w.]*credentials"),
-    _c(r"(?:cat|cp|mv|curl|open|read|send|upload|exfil\w*)\b[^\n]{0,40}\.env\b"),
 ]
+
+# Reading a .env file is the weakest credential signal: it is also how apps
+# load ordinary configuration, so it reports at medium rather than the rule's
+# high default, and escalation still lifts it when the same file sends data
+# out. Lines that handle the checked-in template variants are the standard
+# project-bootstrap idiom and are not findings at all.
+ENV_READ_RE = _c(r"(?:cat|cp|mv|curl|open|read|send|upload|source|exfil\w*)\b[^\n]{0,40}\.env\b")
+ENV_TEMPLATE_RE = _c(r"\.env\.(?:example|sample|template|dist|defaults?|local\.example)")
 
 SECRET_ASSIGN_PATTERNS = [
     _c(r"(?:api[_-]?key|secret|token|password|passwd|access[_-]?key)"
@@ -179,16 +208,68 @@ SECRET_ASSIGN_PATTERNS = [
 ]
 
 DESTRUCTIVE_PATTERNS = [
-    _c(r"rm\s+-[a-z]*r[a-z]*f[a-z]*\s+(?:/|~|\$HOME|\$\{HOME\})(?:\s|/?$|/\*)"),
-    _c(r"rm\s+-[a-z]*f[a-z]*r[a-z]*\s+(?:/|~|\$HOME|\$\{HOME\})(?:\s|/?$|/\*)"),
-    _c(r"\brm\s+-[a-z]*r[a-z]*f\b"),
-    _c(r"\bsudo\s+rm\b"),
     _c(r"\bdd\s+[^\n]*of=/dev/"),
     _c(r"\bmkfs(?:\.\w+)?\s"),
     _c(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"),
     _c(r"chmod\s+-R\s+777"),
     _c(r"git\s+push\s[^\n]*--force(?!-with-lease)"),
 ]
+
+# Recursive force deletes are graded by target rather than matched as one
+# blanket pattern: wiping a scratch directory is routine cleanup that many
+# legitimate skills perform, while the same flags pointed at the home
+# directory or the filesystem root destroy the machine. Flags are checked as
+# a set, so both -rf and -fr count.
+RM_RE = _c(r"\b(?:sudo\s+)?rm\s+(?P<flags>(?:-[A-Za-z]+\s+)+)(?P<target>[^\s;|&)`]+)?")
+
+_TMPISH_PREFIXES = (
+    "/tmp", "/var/tmp", "/private/tmp", "/dev/shm",
+    "$tmpdir", "${tmpdir}", "$tmp", "$temp", "%temp%", "%tmp%",
+)
+
+
+def rm_severity(line):
+    """Return the severity of a recursive force delete on this line, or None.
+
+    critical: the filesystem root or the home directory itself.
+    high:     an absolute path, or a path rooted in the home directory.
+    low:      a relative path, a temp location, or a target the scan cannot
+              resolve, such as a shell variable. The reading pass re-judges
+              these with the surrounding context in view.
+    """
+    m = RM_RE.search(line)
+    if not m:
+        return None
+    flags = (m.group("flags") or "").lower()
+    if "r" not in flags or "f" not in flags:
+        return None
+    target = (m.group("target") or "").strip("\"'")
+    root = target.rstrip("/*")
+    if target.startswith("/") and root == "":
+        return "critical"
+    if root in ("~", "$HOME", "${HOME}"):
+        return "critical"
+    if target.startswith(("~/", "$HOME/", "${HOME}/")):
+        return "high"
+    if target.startswith("/") and not target.lower().startswith(_TMPISH_PREFIXES):
+        return "high"
+    return "low"
+
+
+# Lines that clearly talk ABOUT a dangerous command rather than issuing it:
+# advice against it, a rule that blocks it, a warning that names it. These are
+# everywhere in legitimate documentation, so a match on such a line is
+# recorded at info instead of tanking the grade, and the reading pass, which
+# can weigh the surrounding prose, re-judges it.
+ADVISORY_CUE_RE = _c(
+    r"\b(?:never|do\s*not|don'?t|avoid|warn(?:ing|s)?|danger(?:ous)?|destructive|"
+    r"forbidden|prohibit(?:ed|s)?|deny|denie[sd]|block(?:ed|s)?|detect(?:ed|s|ion)?|"
+    r"prevent(?:ed|s)?|instead\s+of|rather\s+than|bad\s+example|adversarial)\b")
+
+# Rules whose matches are prose-prone enough to earn the advisory downgrade.
+# Exfiltration and credential rules are deliberately excluded: the stakes are
+# higher and a planted cue word must not be able to mute them.
+ADVISORY_RULES = {"SEC004", "SEC008", "SEC013"}
 
 HOME_WIPE_PATTERNS = [
     _c(r"rm\s+-[a-z]*r[a-z]*f[a-z]*\s+(?:/|~|\$HOME|\$\{HOME\})(?:\s|/?$|/\*)"),
@@ -291,6 +372,14 @@ def _snippet(line):
 # Per-file text rules.
 # ---------------------------------------------------------------------------
 
+def _advisory_downgrade(finding, line):
+    """Record a prose-context match at info instead of its full severity."""
+    if finding["rule_id"] in ADVISORY_RULES and ADVISORY_CUE_RE.search(line):
+        finding["severity"] = "info"
+        finding["evidence"] = "advisory or defensive context: " + finding["evidence"]
+    return finding
+
+
 def scan_text_rules(skill, rel_path, text):
     """Apply line-oriented pattern rules to one text file."""
     findings = []
@@ -298,38 +387,49 @@ def scan_text_rules(skill, rel_path, text):
     name = skill["name"]
     sid = skill["id"]
 
+    def add(rule_id, lineno, line, severity=None, recommendation=None):
+        key = (rule_id, rel_path)
+        if counts.get(key, 0) >= MAX_FINDINGS_PER_RULE_PER_FILE:
+            return
+        counts[key] = counts.get(key, 0) + 1
+        findings.append(_advisory_downgrade(make_finding(
+            rule_id, name, sid, rel_path, lineno, _snippet(line),
+            detector="deterministic", severity=severity,
+            recommendation=recommendation), line))
+
     lines = text.split("\n")
     for lineno, line in enumerate(lines, start=1):
         if not line.strip():
             continue
         for rule_id, patterns in LINE_RULES:
-            key = (rule_id, rel_path)
-            if counts.get(key, 0) >= MAX_FINDINGS_PER_RULE_PER_FILE:
-                continue
-            m = _matches_any(patterns, line)
-            if not m:
-                continue
-            counts[key] = counts.get(key, 0) + 1
-            findings.append(make_finding(
-                rule_id, name, sid, rel_path, lineno, _snippet(line),
-                detector="deterministic"))
+            if _matches_any(patterns, line):
+                add(rule_id, lineno, line)
 
-    # Exfiltration hosts are worth flagging even without an explicit send verb.
-    host_counts = 0
-    for lineno, line in enumerate(lines, start=1):
-        if host_counts >= MAX_FINDINGS_PER_RULE_PER_FILE:
-            break
-        m = _matches_any(EXFIL_HOST_PATTERNS, line)
-        if m:
-            host_counts += 1
-            findings.append(make_finding(
-                "SEC003", name, sid, rel_path, lineno, _snippet(line),
-                detector="deterministic",
+        # Recursive force deletes are graded by target; see rm_severity.
+        rm_sev = rm_severity(line)
+        if rm_sev:
+            add("SEC008", lineno, line, severity=rm_sev)
+
+        # Reading .env files: the template variants are the bootstrap idiom.
+        if ENV_READ_RE.search(line) and not ENV_TEMPLATE_RE.search(line):
+            add("SEC005", lineno, line, severity="medium")
+
+        # A netcat send is a channel, not proof; escalation pairs it with
+        # credential access when both sit in one file.
+        if NC_SEND_RE.search(line):
+            add("SEC003", lineno, line, severity="medium")
+
+        # Collection endpoints are a finding even without a send verb.
+        if _matches_any(EXFIL_HOST_PATTERNS, line):
+            add("SEC003", lineno, line,
                 recommendation="Remove the reference to this collection endpoint. "
-                               "Skills must not send local data to outside hosts."))
+                               "Skills must not send local data to outside hosts.")
 
     findings.extend(scan_hidden_text(skill, rel_path, text))
-    findings.extend(scan_cross_file(skill, rel_path, text))
+
+    sec_signal = any(f["rule_id"].startswith("SEC") and f["severity"] != "info"
+                     for f in findings)
+    findings.extend(scan_cross_file(skill, rel_path, text, sec_signal))
     return findings
 
 
@@ -370,11 +470,16 @@ def scan_hidden_text(skill, rel_path, text):
     return findings
 
 
-def scan_cross_file(skill, rel_path, text):
+def scan_cross_file(skill, rel_path, text, sec_signal):
     """SEC010: agent-directed instructions living outside SKILL.md.
 
     Splitting behavior across files, with a benign SKILL.md and the real
     instructions in a reference or script, is a known evasion pattern.
+
+    Second-person imperatives alone do not fire this rule: they are the house
+    style of ordinary reference files across the ecosystem. The rule needs the
+    directive to sit in a file that also carries another security signal, or
+    to co-occur with injection phrasing, before the split reads as evasion.
     """
     if rel_path == "SKILL.md":
         return []
@@ -382,6 +487,8 @@ def scan_cross_file(skill, rel_path, text):
     if not m:
         return []
     injection = _matches_any(INJECTION_PATTERNS, text)
+    if not injection and not sec_signal:
+        return []
     # Quote the whole line the match sits on. Slicing a fixed window around the
     # match produced evidence that began mid-word and read as garbled.
     lineno = _line_of(text, m.start())
@@ -439,6 +546,8 @@ def decode_and_rescan(skill, rel_path, text):
             if hit:
                 dangerous = (rule_id, hit)
                 break
+        if dangerous is None and rm_severity(decoded) in ("high", "critical"):
+            dangerous = ("SEC008", None)
         if dangerous is None:
             hit = _matches_any(EXFIL_HOST_PATTERNS, decoded)
             if hit:
@@ -446,7 +555,7 @@ def decode_and_rescan(skill, rel_path, text):
 
         lineno = _line_of(text, m.start())
         if dangerous:
-            rule_id, hit = dangerous
+            rule_id, _hit = dangerous
             findings.append(make_finding(
                 "SEC007", name, sid, rel_path, lineno,
                 "%s blob decodes to: %s" % (kind, " ".join(decoded.split())[:160]),
@@ -531,7 +640,18 @@ def check_spec(skill):
         add("SPEC010", "allowed-tools is present but empty")
 
     for key in sorted(raw.keys()):
-        if key not in KNOWN_FRONTMATTER_KEYS:
+        if key in KNOWN_FRONTMATTER_KEYS:
+            continue
+        if key in HARNESS_FRONTMATTER_KEYS:
+            findings.append(make_finding(
+                "SPEC009", name, sid, "SKILL.md", None,
+                "harness extension key '%s' is not part of the portable "
+                "Agent Skills spec" % key,
+                detector="deterministic",
+                recommendation="Keep it if the harness you target defines it; "
+                               "other harnesses ignore it without warning. Move "
+                               "custom data into metadata for portability."))
+        else:
             add("SPEC009", "unknown frontmatter key '%s'" % key)
 
     findings.extend(check_references(skill))
@@ -741,8 +861,7 @@ def check_impersonation(inventory):
         claim = _matches_any(OFFICIAL_CLAIM_PATTERNS, description)
         if not claim:
             continue
-        has_license = bool(raw.get("license")) or _has_license_file(skill)
-        if has_license:
+        if _has_license(skill):
             continue
         findings.append(make_finding(
             "TRUST002", skill["name"], skill["id"], "SKILL.md", None,
@@ -760,16 +879,43 @@ def _has_license_file(skill):
     return False
 
 
+def _ancestor_license(skill, levels=3):
+    """True when a license file sits a few directories above the skill.
+
+    Skills distributed inside a plugin or a multi-skill repository usually
+    carry one license at the bundle root rather than one per skill, and
+    flagging each of them separately is noise, not signal.
+    """
+    d = skill.get("path") or ""
+    for _ in range(levels):
+        parent = os.path.dirname(d)
+        if not parent or parent == d:
+            break
+        d = parent
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            break
+        if any(e.lower().startswith(("license", "copying")) for e in entries):
+            return True
+    return False
+
+
+def _has_license(skill):
+    raw = skill["frontmatter"].get("raw") or {}
+    return bool(raw.get("license")) or _has_license_file(skill) or _ancestor_license(skill)
+
+
 def check_license(inventory):
     """TRUST003: no stated license."""
     findings = []
     for skill in inventory["skills"]:
-        raw = skill["frontmatter"].get("raw") or {}
-        if raw.get("license") or _has_license_file(skill):
+        if _has_license(skill):
             continue
         findings.append(make_finding(
             "TRUST003", skill["name"], skill["id"], "SKILL.md", None,
-            "no license field in frontmatter and no license file in the skill directory",
+            "no license in the frontmatter, in the skill directory, or in a "
+            "parent bundle directory",
             detector="deterministic"))
     return findings
 
@@ -807,12 +953,16 @@ def check_description_collisions(inventory, threshold=0.6):
             union = len(ta | tb)
             similarity = overlap / union if union else 0.0
             if similarity >= threshold:
-                findings.append(make_finding(
-                    "QUAL002", a["name"], a["id"], "SKILL.md", None,
-                    "description overlaps '%s' at %.0f%% token similarity"
-                    % (b["name"], similarity * 100),
-                    detector="deterministic",
-                    severity="medium" if similarity >= 0.85 else "low"))
+                # The overlap is symmetric, so both skills get the finding.
+                # Attaching it to only one would grade the pair differently
+                # for what is one shared problem.
+                severity = "medium" if similarity >= 0.85 else "low"
+                for skill, other in ((a, b), (b, a)):
+                    findings.append(make_finding(
+                        "QUAL002", skill["name"], skill["id"], "SKILL.md", None,
+                        "description overlaps '%s' at %.0f%% token similarity"
+                        % (other["name"], similarity * 100),
+                        detector="deterministic", severity=severity))
     return findings
 
 
@@ -832,15 +982,24 @@ def escalate(findings):
             if f["rule_id"] == "SEC005" and ("SEC003" in rules or "SEC004" in rules):
                 f["severity"] = "critical"
                 f["evidence"] += " (in a file that also sends data off the machine)"
+            elif f["rule_id"] == "SEC003" and "SEC005" in rules \
+                    and severity_rank(f["severity"]) < severity_rank("critical"):
+                # A send channel reported below critical, such as a bare
+                # netcat, becomes critical when the same file reads
+                # credential material.
+                f["severity"] = "critical"
+                f["evidence"] += " (in a file that also reads credential material)"
             elif f["rule_id"] == "SEC011" and "SEC003" in rules:
                 f["severity"] = "high"
             elif f["rule_id"] == "SEC001" and "SEC002" in rules:
                 f["severity"] = "critical"
 
     for f in findings:
-        if f["rule_id"] == "SEC008" and _matches_any(HOME_WIPE_PATTERNS, f["evidence"]):
+        if f["rule_id"] == "SEC008" and f["severity"] != "info" \
+                and _matches_any(HOME_WIPE_PATTERNS, f["evidence"]):
             f["severity"] = "critical"
-        elif f["rule_id"] == "SEC013" and INTERPOLATION_HINT.search(f["evidence"]):
+        elif f["rule_id"] == "SEC013" and f["severity"] != "info" \
+                and INTERPOLATION_HINT.search(f["evidence"]):
             f["severity"] = "high"
             f["evidence"] += " (with interpolated input)"
 
@@ -889,8 +1048,8 @@ def scan_inventory(inventory, cap_bytes=DEFAULT_CAP_BYTES, known_names=None):
     escalate(findings)
     findings = dedupe(findings)
     findings.sort(key=lambda f: (
-        f["skill"],
-        -{"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}[f["severity"]],
+        f.get("skill_id") or f["skill"],
+        -severity_rank(f["severity"]),
         f["rule_id"],
         f["file"] or "",
         f["line"] or 0,
@@ -912,11 +1071,10 @@ def dedupe(findings):
     seen = {}
     out = []
     for f in findings:
-        key = (f["rule_id"], f["skill"], f["file"], f["line"])
+        key = (f["rule_id"], f.get("skill_id") or f["skill"], f["file"], f["line"])
         if key in seen:
             existing = seen[key]
-            order = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
-            if order[f["severity"]] > order[existing["severity"]]:
+            if severity_rank(f["severity"]) > severity_rank(existing["severity"]):
                 existing["severity"] = f["severity"]
                 existing["evidence"] = f["evidence"]
             continue
@@ -953,7 +1111,8 @@ def main(argv=None):
 
     inventory = load_inventory(args)
     findings, notes = scan_inventory(inventory, args.cap_bytes, known_names)
-    summary = summarize_findings(findings, [s["name"] for s in inventory["skills"]])
+    summary = summarize_findings(
+        findings, [{"id": s["id"], "name": s["name"]} for s in inventory["skills"]])
 
     write_json(args.out, {
         "source": "deterministic",

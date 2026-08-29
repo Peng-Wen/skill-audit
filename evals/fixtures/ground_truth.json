@@ -17,6 +17,27 @@
       "expected": []
     },
     {
+      "skill": "clean-git-helper",
+      "clean": true,
+      "forbidden_above": "low",
+      "note": "Negative control built from real-world idioms: a scoped recursive delete of build artifacts and explicit advice against a force push. Neither may grade above low.",
+      "expected": []
+    },
+    {
+      "skill": "clean-env-setup",
+      "clean": true,
+      "forbidden_above": "low",
+      "note": "Negative control for the configuration-bootstrap idiom: copying a checked-in .env template must not read as credential access.",
+      "expected": []
+    },
+    {
+      "skill": "clean-docs-style",
+      "clean": true,
+      "forbidden_above": "low",
+      "note": "Negative control whose reference file uses ordinary second-person imperative style. Without another security signal in the file that is house style, not cross-file evasion.",
+      "expected": []
+    },
+    {
       "skill": "evil-exfil-webhook",
       "clean": false,
       "forbidden_above": null,

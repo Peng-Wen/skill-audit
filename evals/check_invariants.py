@@ -150,6 +150,167 @@ def check_fixture_banners(failures):
                     % os.path.relpath(path, REPO))
 
 
+def _write_min_skill(skill_dir, name):
+    os.makedirs(skill_dir, exist_ok=True)
+    with io.open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as fh:
+        fh.write("---\nname: %s\ndescription: Invariant probe skill. "
+                 "Use when checking discovery reach.\n---\n# %s\n" % (name, name))
+
+
+def check_discovery_reach(failures):
+    """Discovery has to find skills the way harnesses actually store them.
+
+    Two layouts broke silently once: plugin caches nest skills several levels
+    below the root (marketplaces/<mp>/plugins/<plugin>/skills/<skill>), and
+    skills installed as symlinks into a harness directory are only reachable
+    when the walk follows links. Both are reproduced here synthetically so a
+    depth cap or walk option cannot quietly reintroduce the miss.
+    """
+    import shutil as _shutil
+    import discover_skills
+
+    scratch = os.environ.get("TMPDIR", "/tmp")
+    base = os.path.join(scratch, "skill-audit-discovery-check")
+    if os.path.exists(base):
+        _shutil.rmtree(base)
+    root = os.path.join(base, "root")
+    _write_min_skill(os.path.join(
+        root, "marketplaces", "mp", "plugins", "plug", "skills", "deep-probe"),
+        "deep-probe")
+    _write_min_skill(os.path.join(base, "elsewhere", "linked-probe"), "linked-probe")
+
+    link_ok = True
+    try:
+        os.symlink(os.path.join(base, "elsewhere", "linked-probe"),
+                   os.path.join(root, "linked-probe"))
+    except OSError:
+        link_ok = False
+
+    try:
+        inventory = discover_skills.build_inventory(
+            [{"path": root, "scope": "override", "harness": "unknown"}])
+        names = {s["name"] for s in inventory["skills"]}
+        if "deep-probe" not in names:
+            failures.append(
+                "discovery missed a skill nested plugin-cache deep "
+                "(marketplaces/<mp>/plugins/<plugin>/skills/<skill>); check "
+                "MAX_DEPTH in discover_skills.py")
+        if link_ok and "linked-probe" not in names:
+            failures.append(
+                "discovery missed a skill installed as a symlink; check that "
+                "the walk follows links")
+    finally:
+        _shutil.rmtree(base, ignore_errors=True)
+
+
+def check_default_search_coverage(failures):
+    """The default search table has to cover every documented harness layout.
+
+    A synthetic home and project are built with one probe skill in each
+    location the mainstream harnesses document (Claude Code including its
+    plugin cache and CLAUDE_CONFIG_DIR override, Codex including CODEX_HOME
+    and its legacy default, OpenCode under XDG, the shared .agents and XDG
+    agents conventions, Gemini CLI, Cursor, OpenClaw, and project-level
+    directories from the working directory up to the repository root).
+    Discovery then runs exactly as a user would run it, with no --paths, in
+    that environment. Every probe has to come back, or a harness's skills
+    have silently fallen out of the audit.
+    """
+    import json
+    import shutil as _shutil
+
+    scratch = os.environ.get("TMPDIR", "/tmp")
+    base = os.path.join(scratch, "skill-audit-harness-coverage")
+    if os.path.exists(base):
+        _shutil.rmtree(base)
+    fake_home = os.path.join(base, "home")
+    codex_home = os.path.join(base, "codex-home")
+    claude_home = os.path.join(base, "claude-home")
+
+    expected = {
+        # name -> harness the entry should be attributed to
+        "probe-claude-user": "claude",        # $CLAUDE_CONFIG_DIR/skills
+        "probe-claude-legacy": "claude",      # ~/.claude/skills, override set
+        "probe-claude-plugin": "claude",      # plugin cache, marketplace deep
+        "probe-codex-home": "codex",          # $CODEX_HOME/skills
+        "probe-codex-legacy": "codex",        # ~/.codex/skills, override set
+        "probe-opencode": "opencode",         # $XDG_CONFIG_HOME/opencode/skills
+        "probe-agents-home": "shared",        # ~/.agents/skills
+        "probe-agents-xdg": "shared",         # $XDG_CONFIG_HOME/agents/skills
+        "probe-gemini": "gemini",
+        "probe-cursor": "cursor",
+        "probe-claw": "openclaw",
+        "probe-repo-root": "shared",          # .agents/skills at the repo root
+        "probe-mid-ancestor": "codex",        # .codex/skills in a mid ancestor
+        "probe-cwd": "opencode",              # .opencode/skills in cwd
+    }
+
+    _write_min_skill(os.path.join(claude_home, "skills", "probe-claude-user"),
+                     "probe-claude-user")
+    _write_min_skill(os.path.join(fake_home, ".claude", "skills", "probe-claude-legacy"),
+                     "probe-claude-legacy")
+    _write_min_skill(os.path.join(
+        claude_home, "plugins", "marketplaces", "mp", "plugins", "pl",
+        "skills", "probe-claude-plugin"), "probe-claude-plugin")
+    _write_min_skill(os.path.join(codex_home, "skills", "probe-codex-home"),
+                     "probe-codex-home")
+    _write_min_skill(os.path.join(fake_home, ".codex", "skills", "probe-codex-legacy"),
+                     "probe-codex-legacy")
+    _write_min_skill(os.path.join(fake_home, ".config", "opencode", "skills",
+                                  "probe-opencode"), "probe-opencode")
+    _write_min_skill(os.path.join(fake_home, ".agents", "skills", "probe-agents-home"),
+                     "probe-agents-home")
+    _write_min_skill(os.path.join(fake_home, ".config", "agents", "skills",
+                                  "probe-agents-xdg"), "probe-agents-xdg")
+    _write_min_skill(os.path.join(fake_home, ".gemini", "skills", "probe-gemini"),
+                     "probe-gemini")
+    _write_min_skill(os.path.join(fake_home, ".cursor", "skills", "probe-cursor"),
+                     "probe-cursor")
+    _write_min_skill(os.path.join(fake_home, ".claw", "skills", "probe-claw"),
+                     "probe-claw")
+
+    # Project tree: repo-root/.agents, a mid-level ancestor, and the cwd, with
+    # discovery launched from the deepest directory.
+    repo = os.path.join(base, "work", "repo")
+    os.makedirs(os.path.join(repo, ".git"), exist_ok=True)
+    _write_min_skill(os.path.join(repo, ".agents", "skills", "probe-repo-root"),
+                     "probe-repo-root")
+    _write_min_skill(os.path.join(repo, "mid", ".codex", "skills", "probe-mid-ancestor"),
+                     "probe-mid-ancestor")
+    leaf = os.path.join(repo, "mid", "leaf")
+    _write_min_skill(os.path.join(leaf, ".opencode", "skills", "probe-cwd"),
+                     "probe-cwd")
+
+    env = dict(os.environ)
+    env["HOME"] = fake_home
+    env["USERPROFILE"] = fake_home
+    env["XDG_CONFIG_HOME"] = os.path.join(fake_home, ".config")
+    env["CODEX_HOME"] = codex_home
+    env["CLAUDE_CONFIG_DIR"] = claude_home
+    env.pop("SKILL_AUDIT_PATHS", None)
+
+    out = os.path.join(base, "inventory.json")
+    try:
+        subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "discover_skills.py"),
+             "--out", out, "--quiet"],
+            cwd=leaf, env=env, check=True)
+        with io.open(out, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        found = {s["name"]: s["harness"] for s in inventory["skills"]}
+        for name, harness in sorted(expected.items()):
+            if name not in found:
+                failures.append(
+                    "default search paths missed %s (expected under the %s "
+                    "harness layout)" % (name, harness))
+            elif found[name] != harness:
+                failures.append(
+                    "%s was attributed to harness %r rather than %r"
+                    % (name, found[name], harness))
+    finally:
+        _shutil.rmtree(base, ignore_errors=True)
+
+
 def check_rubric_weights(failures):
     """The rubric's stated weights and the scoring code must agree.
 
@@ -181,11 +342,13 @@ def main():
     own = check_self_audit_clean(failures)
     copied = check_self_exclusion_is_identity_based(failures)
     check_fixture_banners(failures)
+    check_discovery_reach(failures)
+    check_default_search_coverage(failures)
     check_rubric_weights(failures)
 
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
           "self-audit cleanliness, self-exclusion scope, fixture banners, "
-          "rubric weights.")
+          "discovery reach, per-harness search coverage, rubric weights.")
     print("Self-audit: %d finding(s) against the running scanner (must be 0); "
           "%d finding(s) when a copy is scanned (must be above 0)."
           % (own, copied))

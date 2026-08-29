@@ -4,9 +4,11 @@ Skills install as plain Markdown from public repositories, usually with no signi
 Your agent then reads them as instructions.
 The published research on what that means is not reassuring.
 
-- A February 2026 Snyk study scanned 3,984 skills across ClawHub and skills.sh: 36.8% carried at least one flaw and 13.4% carried something critical, including malware, prompt injection, and exposed secrets.
-- The ClawHavoc campaign placed 341 malicious skills in a single registry, using typosquatted names, credential exfiltration to webhooks, and behavior split across files so that a benign-looking SKILL.md hid the real payload.
-- OWASP now publishes an Agentic Skills Top 10, and every rule in this skill maps onto one of its categories.
+- Snyk's [ToxicSkills study](https://snyk.io/blog/toxicskills-malicious-ai-agent-skills-clawhub/) scanned 3,984 skills across ClawHub and skills.sh as of 5 February 2026: 36.8% carried at least one flaw and 13.4% carried something critical, including malware, prompt injection, and exposed secrets.
+- The [ClawHavoc campaign](https://www.koi.ai/blog/clawhavoc-341-malicious-clawedbot-skills-found-by-the-bot-they-were-targeting) placed at least 341 malicious skills in a single registry, using typosquatted names, credential exfiltration to webhooks, and behavior split across files so that a benign-looking SKILL.md hid the real payload. Follow-up reporting put the count past 800 as the sweep continued.
+- OWASP now publishes an [Agentic Skills Top 10](https://owasp.org/www-project-agentic-skills-top-10/), and every rule in this skill maps onto one of its categories.
+
+These figures are current as of the dates above; treat every count as a floor rather than a total, since the registries and the sweeps against them are both still moving.
 
 One finding shapes the whole design.
 

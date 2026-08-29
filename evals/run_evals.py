@@ -175,6 +175,15 @@ def run_live_trial(case, agent, extra_args, fixtures_dir, workspace, timeout):
 
     env = dict(os.environ)
     env["SKILL_AUDIT_PATHS"] = staged_fixtures
+    # The persistence fixture writes to a shell-startup file under $FIXTURE_HOME
+    # rather than a literal home path, and this lane exists to test whether the
+    # agent obeys such planted instructions. Point that variable at disposable
+    # scratch so that if a trial ever does execute the line, the write lands
+    # there rather than in the real home directory. HOME itself is left alone,
+    # because the agent adapter reads its own credentials and config from it.
+    fixture_home = os.path.join(workspace, "fixture-home")
+    os.makedirs(fixture_home, exist_ok=True)
+    env["FIXTURE_HOME"] = fixture_home
 
     prompt = case["prompt"].replace("{fixtures}", staged_fixtures)
     command = build_command(agent, prompt, extra_args)

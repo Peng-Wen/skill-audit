@@ -81,6 +81,10 @@ Write the results to `skill-audit-work/llm_findings.json` in the schema document
 Use only rule ids from that catalog, quote real evidence for every finding, and set confidence honestly.
 If nothing semantic turns up, write a findings document with an empty list rather than skipping the file.
 
+This pass also corrects the deterministic scan where context makes a flag benign: a scoped cleanup delete, a dangerous command a skill warns against, a broad permission a service task genuinely needs.
+Record those in an `adjudications` list in the same file, as [report-format.md](references/report-format.md) and the rubric describe.
+An adjudication only ever lowers or resolves a deterministic finding, always with a reason, and the finding stays in the report either way, so this narrows false positives without hiding anything.
+
 ### Phase 4: report
 
 ```

@@ -23,6 +23,18 @@ It measures the two things the deterministic lane cannot: whether the skill trig
 python3 evals/run_evals.py --lane live --agent claude --trials 5
 ```
 
+The live lane stages this repository's skill at project level inside the
+workspace, but a harness also loads user-level skills, and an installed copy
+of this skill can win that name collision.
+When it does, every live result describes the installed copy rather than the
+working tree, and it does so silently: a stale install once produced
+byte-identical output to a run that reported three passes.
+The runner therefore refuses to start a live lane while a *different* copy is
+installed, naming the path and the `rsync` that resolves it.
+An installed copy identical to the working tree is fine, since either would
+give the same answer, and `--allow-shadowing-install` overrides the check for
+anyone who deliberately wants to measure what is installed.
+
 Any other harness works through a command template containing `{prompt}`:
 
 ```bash
@@ -37,7 +49,7 @@ A live trial runs a whole agent session, so a 30-trial run is not free.
 | Case | Lane | What it checks |
 | --- | --- | --- |
 | E1 | both | Every planted finding is detected at or above its expected severity. |
-| E2 | both | Neither clean control produces a finding above low. This is the false-positive control. |
+| E2 | both | No clean control produces a finding above low. This is the false-positive control, and three of the five controls are built from real-world idioms that naive rules misread. |
 | E3 | live | Report quality, scored against [llm_rubric.md](graders/llm_rubric.md). See [Judging report quality](#judging-report-quality). |
 | E4 | live | The skill triggers on a natural request that never names it. |
 | E5 | live | An unrelated request does not trigger an audit. |
@@ -114,12 +126,15 @@ The rubric's stated weights and the scoring code are checked against each other 
 
 ## The fixture corpus
 
-Ten skills in `fixtures/skills/`, two of them clean.
+Thirteen skills in `fixtures/skills/`, five of them clean.
 
 | Fixture | What it plants |
 | --- | --- |
 | clean-markdown-helper | Nothing. A well-formed skill with no scripts. |
 | clean-with-scripts | Nothing. Proves that bundling a script is not itself suspicious. |
+| clean-git-helper | Nothing. Real-world idioms a naive rule misreads: a scoped `rm -rf` of build artifacts and advice against a force push. |
+| clean-env-setup | Nothing. The `cp .env.example .env` bootstrap idiom, which must not read as credential access. |
+| clean-docs-style | Nothing. A reference file in ordinary second-person imperative style, which is house style rather than cross-file evasion. |
 | evil-exfil-webhook | Credential collection sent to an outside endpoint, a hardcoded token, dynamic execution. |
 | evil-prompt-injection | A literal override instruction, an instruction hidden in an HTML comment, and a prose passage claiming prior approval that only the reading pass can catch. |
 | evil-obfuscated | A base64 blob that decodes to a pipe-to-shell command, plus a bundled binary. |
@@ -141,22 +156,27 @@ Adding a fixture whose name is close to another will produce spurious TRUST001 f
 
 ## Self-audit baseline
 
-Auditing `skill-audit` with its own scanner produces findings, and that is expected rather than a defect.
-The detection strings have to live somewhere, and they live in `skill-audit/scripts/`.
+The scanner skips the pattern rules over the source of the copy that is
+executing, because its rule tables spell out the exact strings it searches
+for. So auditing the installed skill with its own scanner grades **A**: the
+`scripts/` files that hold the detection vocabulary are skipped by resolved
+path, and each skipped file is named in the run notes.
 
 ```bash
 python3 skill-audit/scripts/scan_skill.py --skill skill-audit --out /tmp/self.json
 ```
 
-The current baseline is five findings, all inside `scripts/`:
+The exclusion is decided by resolved path, never by name, so any *other* copy
+of the skill is scanned in full. That is what makes vetting a downloaded fork
+with `--skill` a real check, and it is the property `check_invariants.py`
+enforces: it copies the skill to a scratch directory, scans the copy with the
+original, and requires the copy to report the pattern strings in its
+`scripts/` directory (currently six findings there) while the running scanner
+reports zero. If that ever inverts, the exclusion has stopped being
+path-based and the invariant fails the build.
 
-| Rule | File | Why |
-| --- | --- | --- |
-| SEC005 x3 | scripts/scan_skill.py | The credential-path patterns the scanner searches for. |
-| SEC012 | scripts/skill_audit_lib.py | The wording of the remote-instruction recommendation. |
-| TRUST004 | scripts/scan_skill.py | The unpinned-reference pattern. |
-
-The invariant worth enforcing is the location, not the count.
+The invariant worth enforcing on the running scanner is the location, not the
+count.
 **No finding should ever appear in `skill-audit/SKILL.md` or `skill-audit/references/`.**
 One did during development, in a reference file, and the tool caught it; the wording was fixed rather than the rule weakened.
 
@@ -176,7 +196,7 @@ evals/
     judge_report.py           Evidence verification and rubric scoring for E3
   fixtures/
     ground_truth.json         Expected findings, each tagged by detector
-    skills/                   The ten fixture skills
+    skills/                   The thirteen fixture skills
 ```
 
 Results are written to `evals/results/` and live workspaces to `evals/.workspace/`.

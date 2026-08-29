@@ -87,7 +87,7 @@ python3 skill-audit/scripts/scan_skill.py --skill ~/Downloads/some-skill --out f
 - [**What it checks**](docs/checks.md) - the 35 rules, the grading scale, and two design choices worth knowing about.
 - [**How it works**](docs/how-it-works.md) - the five phases, the injection guardrail, and how the skill audits itself.
 - [**What this cannot tell you**](docs/limitations.md) - the honest ceiling on any static analysis of a Markdown file.
-- [**Eval suite**](evals/README.md) - six cases, ten fixtures, and the numbers behind the badges.
+- [**Eval suite**](evals/README.md) - six cases, thirteen fixtures, and the numbers behind the badges.
 
 ## Reporting issues
 

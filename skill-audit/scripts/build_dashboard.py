@@ -57,30 +57,38 @@ def build_data(findings_doc, inventory, title):
     summary = findings_doc.get("summary", {})
     cost = findings_doc.get("context_cost", {})
 
+    # Everything is keyed by skill id: names can collide across scopes, and a
+    # page that pooled two skills under one name would hand one skill the
+    # other's grade.
     paths = {}
     file_counts = {}
     for skill in (inventory or {}).get("skills", []):
-        paths[skill["name"]] = skill.get("path")
-        file_counts[skill["name"]] = len(skill.get("files", []))
+        paths[skill["id"]] = skill.get("path")
+        file_counts[skill["id"]] = len(skill.get("files", []))
 
-    cost_rows = {row["skill"]: row for row in cost.get("rows", [])}
+    cost_rows = {row.get("skill_id") or row["skill"]: row
+                 for row in cost.get("rows", [])}
 
     grouped = {}
     for f in findings:
-        grouped.setdefault(f["skill"], []).append(f)
+        grouped.setdefault(f.get("skill_id") or f.get("skill"), []).append(f)
 
     skills = []
-    for name, info in summary.get("by_skill", {}).items():
-        row = cost_rows.get(name, {})
-        entries = sorted(grouped.get(name, []),
-                         key=lambda f: (-severity_rank(f["severity"]), f["rule_id"]))
+    for sid, info in summary.get("by_skill", {}).items():
+        row = cost_rows.get(sid, {})
+        entries = sorted(grouped.get(sid, []),
+                         key=lambda f: (f.get("status") == "resolved",
+                                        -severity_rank(f["severity"]),
+                                        f["rule_id"]))
         skills.append({
-            "name": name,
+            "id": sid,
+            "name": info.get("name") or sid,
             "grade": info.get("grade", "A"),
             "counts": info.get("counts", {}),
+            "resolved": info.get("resolved", 0),
             "harness": row.get("harness", "unknown"),
-            "path": paths.get(name),
-            "files": file_counts.get(name),
+            "path": paths.get(sid),
+            "files": file_counts.get(sid),
             "always_on_tokens": row.get("always_on_tokens", 0),
             "body_tokens": row.get("body_tokens", 0),
             "resource_tokens": row.get("resource_tokens", 0),
@@ -96,12 +104,15 @@ def build_data(findings_doc, inventory, title):
                 "detector": f.get("detector", ""),
                 "owasp": f.get("owasp") or [],
                 "confidence": f.get("confidence", ""),
+                "status": f.get("status", "active"),
+                "original_severity": f.get("original_severity"),
+                "resolution_reason": (f.get("resolution") or {}).get("reason", ""),
             } for f in entries],
         })
 
-    skills.sort(key=lambda s: (GRADE_ORDER.get(s["grade"], 5), s["name"]))
+    skills.sort(key=lambda s: (GRADE_ORDER.get(s["grade"], 5), s["name"], s["id"]))
 
-    plan = build_action_plan(findings, summary)
+    plan = build_action_plan(findings, summary, paths)
 
     return {
         "title": title,
@@ -492,6 +503,12 @@ h2 {
   max-width: 78ch;
 }
 
+/* A resolved finding stays on the page, dimmed: visible is the whole point
+   of recording adjudications instead of suppressing findings. */
+.finding.resolved { opacity: .62; }
+.finding.resolved .finding-title { text-decoration: line-through; text-decoration-thickness: 1px; }
+.resolved-label { color: var(--clean); }
+
 /* Context cost --------------------------------------------------------- */
 
 .cost { display: flex; flex-direction: column; gap: 14px; }
@@ -583,6 +600,13 @@ h2 {
 .step .what { margin-top: 4px; font-size: 14px; max-width: 76ch; text-wrap: pretty; }
 
 .step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; }
+.step-loc {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
 .step-grade, .step-count {
   font-family: var(--mono);
   font-size: 11px;
@@ -872,6 +896,7 @@ SCRIPT = r"""
     SEV.forEach(function (sev) { counts[sev] = 0; });
     data.skills.forEach(function (skill) {
       skill.findings.forEach(function (f) {
+        if (f.status === "resolved") { return; }
         if (textMatchesFinding(skill, f)) { counts[f.severity] = (counts[f.severity] || 0) + 1; }
       });
     });
@@ -910,6 +935,11 @@ SCRIPT = r"""
   }
 
   function findingMatches(skill, f) {
+    /* A resolved finding grades nothing, so it never answers a severity
+       filter; it stays reachable through text search and the plain view. */
+    if (f.status === "resolved") {
+      return !sevFilterOn() && textMatchesFinding(skill, f);
+    }
     if (sevFilterOn() && !active[f.severity]) { return false; }
     return textMatchesFinding(skill, f);
   }
@@ -923,11 +953,17 @@ SCRIPT = r"""
   }
 
   function findingNode(f) {
-    var node = el("div", "finding");
-    node.style.setProperty("--sev", SEV_VAR[f.severity] || "var(--info)");
+    var resolved = f.status === "resolved";
+    var node = el("div", "finding" + (resolved ? " resolved" : ""));
+    node.style.setProperty("--sev", resolved ? "var(--line)"
+                                             : (SEV_VAR[f.severity] || "var(--info)"));
 
     var head = el("div", "finding-head");
-    head.appendChild(el("span", "sev", f.severity));
+    if (resolved) {
+      head.appendChild(el("span", "sev resolved-label", "resolved"));
+    } else {
+      head.appendChild(el("span", "sev", f.severity));
+    }
     head.appendChild(el("span", "rule", f.rule_id));
     var where = f.file || "skill";
     if (f.line) { where += ":" + f.line; }
@@ -938,11 +974,29 @@ SCRIPT = r"""
 
     if (f.evidence) { node.appendChild(el("pre", "evidence", f.evidence)); }
 
+    if (resolved) {
+      var res = el("p", "fix");
+      res.appendChild(el("b", null, "Resolved "));
+      res.appendChild(document.createTextNode(
+        "by the semantic review, originally " + (f.original_severity || "?") +
+        ": " + (f.resolution_reason || "")));
+      node.appendChild(res);
+      return node;
+    }
+
     if (f.recommendation) {
       var fix = el("p", "fix");
       fix.appendChild(el("b", null, "Fix "));
       fix.appendChild(document.createTextNode(f.recommendation));
       node.appendChild(fix);
+    }
+    if (f.original_severity) {
+      var adj = el("p", "fix");
+      adj.appendChild(el("b", null, "Adjudicated "));
+      adj.appendChild(document.createTextNode(
+        "down from " + f.original_severity + " by the semantic review: " +
+        (f.resolution_reason || "")));
+      node.appendChild(adj);
     }
 
     var tags = el("div", "tags");
@@ -959,8 +1013,8 @@ SCRIPT = r"""
     /* Filtering to something and then having to open every card to see what
        matched is the filter not doing its job. A hand-set card wins, because
        the reader set it more recently than the filter did. */
-    if (Object.prototype.hasOwnProperty.call(manualOpen, skill.name)) {
-      box.open = manualOpen[skill.name];
+    if (Object.prototype.hasOwnProperty.call(manualOpen, skill.id)) {
+      box.open = manualOpen[skill.id];
     } else {
       box.open = expanded || (filtering && shown.length > 0);
     }
@@ -969,7 +1023,7 @@ SCRIPT = r"""
     summary.addEventListener("click", function () {
       /* The click flips the details after this handler runs, so the state the
          reader is asking for is the opposite of the current one. */
-      manualOpen[skill.name] = !box.open;
+      manualOpen[skill.id] = !box.open;
     });
     var grade = el("div", "grade", skill.grade);
     grade.style.setProperty("--sev", GRADE_VAR[skill.grade] || "var(--info)");
@@ -992,6 +1046,7 @@ SCRIPT = r"""
       pills.appendChild(pill);
     });
     if (!pills.childNodes.length) { pills.appendChild(el("span", "pill plain", "clean")); }
+    if (skill.resolved) { pills.appendChild(el("span", "pill plain", skill.resolved + " resolved")); }
     pills.appendChild(el("span", "pill plain", skill.always_on_tokens + " tok always on"));
     summary.appendChild(pills);
     box.appendChild(summary);
@@ -1158,6 +1213,7 @@ SCRIPT = r"""
     head.appendChild(el("span", "step-count", plural(group.count, "finding")));
     body.appendChild(head);
 
+    if (group.path) { body.appendChild(el("div", "step-loc", group.path)); }
     body.appendChild(el("div", "what", group.decision));
 
     var ul = el("ul", "fixes");

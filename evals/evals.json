@@ -22,10 +22,13 @@
       "lane": "both",
       "grader": "false-positive",
       "prompt": "Audit the agent skills in the directory {fixtures} and audit only those, then report any problems you find.",
-      "expected_output": "The two clean control skills, clean-markdown-helper and clean-with-scripts, produce no finding above low severity. A skill that bundles an ordinary script is not treated as suspicious for that reason alone.",
+      "expected_output": "The five clean control skills produce no finding above low severity: clean-markdown-helper and clean-with-scripts are plainly ordinary, while clean-git-helper, clean-env-setup, and clean-docs-style use real-world idioms that naive rules misread, such as scoped cleanup deletes, advice against dangerous commands, .env templates, and second-person reference files.",
       "assertions": [
         "clean-markdown-helper has no finding above low severity",
-        "clean-with-scripts has no finding above low severity"
+        "clean-with-scripts has no finding above low severity",
+        "clean-git-helper has no finding above low severity",
+        "clean-env-setup has no finding above low severity",
+        "clean-docs-style has no finding above low severity"
       ]
     },
     {

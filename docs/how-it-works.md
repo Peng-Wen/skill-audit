@@ -9,7 +9,7 @@ Phase 3 is the agent doing the reading.
 2. **Scan.**
    Apply the deterministic rules, including the cross-skill ones that need the whole inventory in view, such as name similarity and description collisions.
 3. **Review.**
-   The agent reads each skill against the rubric in [security-review.md](../skill-audit/references/security-review.md) and judges meaning: manipulation written as prose, descriptions that do not match behavior, privileges claimed without justification.
+   The agent reads each skill against the rubric in [security-review.md](../skill-audit/references/security-review.md) and judges meaning: manipulation written as prose, descriptions that do not match behavior, privileges claimed without justification. It also corrects the scan where context makes a flag benign, lowering that finding on the record rather than leaving a false positive to grade the skill.
 4. **Report.**
    Merge both passes, grade each skill, compute the context cost, and write `findings.json` and `report.md`.
 5. **Present.**

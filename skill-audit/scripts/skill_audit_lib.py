@@ -15,7 +15,7 @@ import os
 import re
 import unicodedata
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 # Severity ordering, lowest to highest. Used for comparisons and grading.
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -303,6 +303,23 @@ def _strip_quotes(value):
     return v
 
 
+_INLINE_COMMENT_RE = re.compile(r"\s+#.*$")
+
+
+def _strip_inline_comment(value):
+    """Drop a trailing YAML comment from an unquoted scalar.
+
+    In YAML a '#' preceded by whitespace starts a comment; a quoted scalar
+    keeps its '#' characters, so quoted values are left for _strip_quotes.
+    """
+    v = value.strip()
+    if v[:1] in ("'", '"'):
+        return value
+    if v.startswith("#"):
+        return ""
+    return _INLINE_COMMENT_RE.sub("", value)
+
+
 def _dedent_block(lines):
     """Remove the common leading whitespace from a list of block-scalar lines."""
     indents = [len(ln) - len(ln.lstrip(" ")) for ln in lines if ln.strip()]
@@ -339,10 +356,12 @@ def parse_frontmatter(text):
     if not lines or lines[0].strip() != "---":
         return {}, text, "no frontmatter block"
 
-    # Find the closing delimiter.
+    # Find the closing delimiter. YAML requires it at column 0; accepting an
+    # indented "---" would let a horizontal rule inside a block scalar end the
+    # frontmatter early and silently drop every field after it.
     close_idx = None
     for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
+        if lines[i].rstrip() == "---" and not lines[i][0].isspace():
             close_idx = i
             break
     if close_idx is None:
@@ -437,7 +456,8 @@ def parse_frontmatter(text):
                     nm = _NESTED_RE.match(fm_lines[j])
                     if not nm:
                         break
-                    nested[nm.group(2)] = _strip_quotes(nm.group(3).rstrip())
+                    nested[nm.group(2)] = _strip_quotes(
+                        _strip_inline_comment(nm.group(3).rstrip()))
                     j += 1
                 result[key] = nested
                 i = j
@@ -448,7 +468,7 @@ def parse_frontmatter(text):
             continue
 
         # Plain scalar.
-        result[key] = _strip_quotes(value)
+        result[key] = _strip_quotes(_strip_inline_comment(value))
         i += 1
 
     return result, body, None
@@ -656,7 +676,9 @@ def make_finding(rule_id, skill, skill_id, file, line, evidence, *,
                  recommendation=None):
     """Build a finding dict from the rule registry plus call-site details."""
     meta = RULES.get(rule_id, {})
-    ev = evidence if evidence is not None else ""
+    # Evidence is quoted from files and later interpolated into Markdown and
+    # prompts, so newlines and runs of whitespace are collapsed here once.
+    ev = " ".join(str(evidence).split()) if evidence is not None else ""
     if len(ev) > _EVIDENCE_CAP:
         ev = ev[:_EVIDENCE_CAP - 3] + "..."
     return {
@@ -678,32 +700,43 @@ def make_finding(rule_id, skill, skill_id, file, line, evidence, *,
 def summarize_findings(findings, skills=None):
     """Build the summary block for a findings document.
 
-    skills is an optional iterable of skill names so that skills with zero
-    findings still appear (graded A).
+    Entries are keyed by skill id, never by name: two distinct skills can
+    legitimately share a directory name across scopes, and pooling them under
+    one name lets a clean skill inherit another skill's grade. Each entry
+    carries the display name.
+
+    skills is an optional iterable of skill dicts (id and name) or plain names
+    so that skills with zero findings still appear, graded A. A finding marked
+    resolved by an adjudication is counted separately and does not grade.
     """
     by_skill = {}
     by_category = {}
     totals = empty_counts()
 
-    names = set()
-    if skills:
-        names.update(skills)
-    for f in findings:
-        names.add(f.get("skill"))
+    def seed(sid, name):
+        if sid and sid not in by_skill:
+            by_skill[sid] = {"name": name, "grade": "A",
+                             "counts": empty_counts(), "resolved": 0}
 
-    for name in names:
-        by_skill[name] = {"grade": "A", "counts": empty_counts()}
+    for s in (skills or []):
+        if isinstance(s, dict):
+            seed(s.get("id") or s.get("name"), s.get("name"))
+        else:
+            seed(s, s)
 
     for f in findings:
+        sid = f.get("skill_id") or f.get("skill")
+        seed(sid, f.get("skill"))
+        if f.get("status") == "resolved":
+            by_skill[sid]["resolved"] += 1
+            continue
         sev = f.get("severity", "medium")
         cat = f.get("category", "SEC")
-        name = f.get("skill")
-        by_skill.setdefault(name, {"grade": "A", "counts": empty_counts()})
-        by_skill[name]["counts"][sev] = by_skill[name]["counts"].get(sev, 0) + 1
+        by_skill[sid]["counts"][sev] = by_skill[sid]["counts"].get(sev, 0) + 1
         by_category[cat] = by_category.get(cat, 0) + 1
         totals[sev] = totals.get(sev, 0) + 1
 
-    for name, entry in by_skill.items():
+    for sid, entry in by_skill.items():
         entry["grade"] = grade_for(entry["counts"])
 
     return {"by_skill": by_skill, "by_category": by_category, "totals": totals}
@@ -768,20 +801,27 @@ def fence_safe(text):
     return out.replace("```", "'''").strip()
 
 
-def build_action_plan(findings, summary):
+def build_action_plan(findings, summary, paths=None):
     """One ordered list of what to do, worst skill first.
 
     The decision for a skill and the edits that carry it out are the same piece
     of work seen at two zoom levels, so they live in one entry rather than in
     two lists a reader has to cross-reference.
+
+    Grouping is by skill id, and each entry carries the skill's path when the
+    caller supplies an id-to-path mapping: names can collide across scopes, and
+    whoever acts on the plan needs to know which directory it is about.
+    Findings resolved by an adjudication are not action items and are skipped.
     """
     by_skill = {}
     for f in findings:
-        by_skill.setdefault(f["skill"], []).append(f)
+        if f.get("status") == "resolved":
+            continue
+        by_skill.setdefault(f.get("skill_id") or f.get("skill"), []).append(f)
 
     plan = []
-    for name, info in (summary.get("by_skill") or {}).items():
-        entries = by_skill.get(name, [])
+    for sid, info in (summary.get("by_skill") or {}).items():
+        entries = by_skill.get(sid, [])
         if not entries:
             continue
         entries = sorted(entries, key=lambda f: (-severity_rank(f["severity"]), f["rule_id"]))
@@ -802,7 +842,9 @@ def build_action_plan(findings, summary):
             })
 
         plan.append({
-            "skill": name,
+            "skill": info.get("name") or sid,
+            "skill_id": sid,
+            "path": (paths or {}).get(sid),
             "grade": grade,
             "severity": entries[0]["severity"],
             "headline": RULES.get(entries[0]["rule_id"], {}).get("title", entries[0]["rule_id"]),
@@ -834,6 +876,8 @@ def build_agent_prompt(plan, skill_count):
         lines.append("%d. [%s] %s (grade %s, %d finding(s))"
                      % (i, group["severity"].upper(), fence_safe(group["skill"]),
                         group["grade"], group["count"]))
+        if group.get("path"):
+            lines.append("   Location: %s" % fence_safe(group["path"]))
         lines.append("   Decision: %s" % fence_safe(group["decision"]))
         for item in group["items"]:
             lines.append("   - [%s] %s %s at %s"

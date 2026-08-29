@@ -86,6 +86,24 @@ A local file task that asks for network or web access is the clearest case: noth
 Cover every skill that declares tools, including ones the scanner already flagged.
 A skill the scanner marked at medium still needs this judgment, since medium and high mean different things to whoever reads the report.
 
+When the breadth is warranted, say so with an adjudication rather than a fresh finding.
+A skill that manages a service genuinely needs shell access, and a scanner flag on it is a false positive that should be lowered, not left to grade the skill forever.
+Write an adjudication (see [report-format.md](report-format.md)) that names the deterministic finding, gives verdict `downgrade` or `resolve`, and states why the access fits the task.
+The finding stays in the report at its original severity with your reason attached, so the reader sees both the structural fact and your judgment of it.
+
+### 8. Adjudicating a deterministic false positive
+
+The reading pass is also where a deterministic finding gets corrected.
+The scanner grades from structure alone, so it will sometimes flag a benign construct: a scoped cleanup delete, a documented dangerous command a skill warns against, a broad permission a service task actually needs.
+When the surrounding context makes a finding clearly benign, adjudicate it instead of leaving it to stand.
+
+- Point the adjudication at one specific finding by rule, skill, file, and line.
+  An adjudication whose selectors match several findings is refused, so write one per finding rather than one that sweeps a rule.
+- Use `resolve` when the finding does not describe a real risk at all, and `downgrade` with a lower severity when it overstates one.
+- Always give the reason from the evidence. An adjudication is a claim about the skill exactly as a finding is, and it is held to the same evidence standard.
+
+Adjudications are conservative by design: they only ever lower a deterministic finding, they never touch semantic findings, and every one is recorded in the report notes, so the correction is as visible as the finding it addresses.
+
 ### 6. Provenance and identity
 
 - Does the skill claim to be official, verified, or endorsed, and is there anything to support the claim.

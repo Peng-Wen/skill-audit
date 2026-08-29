@@ -109,18 +109,74 @@ def stage_workspace(workspace, fixtures_dir):
     The fixtures are copied rather than referenced so a run cannot modify the
     corpus, and SKILL_AUDIT_PATHS points at the copy so the audit never reaches
     the host's real skills.
+
+    Compiled bytecode is not staged. A stale __pycache__ copied alongside the
+    sources is one more way for a trial to execute code that is not the code
+    under test.
     """
     if os.path.exists(workspace):
         shutil.rmtree(workspace)
     os.makedirs(workspace)
 
     staged_skill = os.path.join(workspace, ".claude", "skills", "skill-audit")
-    shutil.copytree(SKILL_DIR, staged_skill)
+    shutil.copytree(SKILL_DIR, staged_skill,
+                    ignore=shutil.ignore_patterns("__pycache__"))
 
     staged_fixtures = os.path.join(workspace, "fixture-skills")
     shutil.copytree(fixtures_dir, staged_fixtures)
 
     return staged_skill, staged_fixtures
+
+
+def _tree_digest(root):
+    """Content hash of a skill directory, ignoring compiled bytecode."""
+    import hashlib
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        for name in sorted(filenames):
+            if name.endswith((".pyc", ".pyo")):
+                continue
+            full = os.path.join(dirpath, name)
+            h.update(os.path.relpath(full, root).encode("utf-8"))
+            try:
+                with open(full, "rb") as fh:
+                    h.update(fh.read())
+            except OSError:
+                continue
+    return h.hexdigest()
+
+
+def check_for_shadowing_install(skill_dir):
+    """Refuse to run a live lane that would silently test the wrong code.
+
+    The workspace stages this repository's skill at project level, but a
+    harness also loads user-level skills, and a copy of this skill installed
+    there can win the name collision. When it does, the whole lane measures
+    the installed copy: it produced byte-identical output to a stale install
+    once, and reported a pass that said nothing about the working tree.
+
+    An installed copy whose contents match the working tree is harmless, since
+    either one would give the same answer. Anything else is reported, with the
+    command that resolves it, rather than being quietly measured.
+    """
+    sys.path.insert(0, SCRIPTS)
+    import discover_skills
+
+    name = os.path.basename(os.path.normpath(skill_dir))
+    local = _tree_digest(skill_dir)
+    conflicts = []
+    for entry in discover_skills.default_search_paths():
+        if entry["scope"] not in ("user", "system", "plugin"):
+            continue
+        for found in discover_skills.find_skill_dirs(entry["path"]):
+            if os.path.basename(os.path.normpath(found)) != name:
+                continue
+            if os.path.realpath(found) == os.path.realpath(skill_dir):
+                continue
+            if _tree_digest(found) != local:
+                conflicts.append(found)
+    return conflicts
 
 
 def build_command(agent, prompt, extra_args):
@@ -664,6 +720,10 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=600, help="Seconds per live trial.")
     parser.add_argument("--thresholds", help="Override, e.g. recall=0.95,fp=0,f1=0.85.")
     parser.add_argument("--ci", action="store_true", help="Exit nonzero on any failure.")
+    parser.add_argument("--allow-shadowing-install", action="store_true",
+                        help="Run the live lane even when a different copy of this "
+                             "skill is installed where the harness loads skills from. "
+                             "The result then describes that copy, not this tree.")
     args = parser.parse_args(argv)
 
     with open(args.evals, "r", encoding="utf-8") as fh:
@@ -678,6 +738,26 @@ def main(argv=None):
     if not cases:
         print("No cases apply to the %s lane with the given selection." % args.lane)
         return 1
+
+    if args.lane == "live" and not args.allow_shadowing_install:
+        conflicts = check_for_shadowing_install(SKILL_DIR)
+        if conflicts:
+            print("Refusing to run the live lane: a different copy of this skill is "
+                  "installed where the harness also loads skills from, and it can win "
+                  "the name collision with the staged copy. The lane would measure "
+                  "that copy instead of this working tree.")
+            print("")
+            for path in conflicts:
+                print("  %s" % path)
+            print("")
+            print("Update the installed copy to match this working tree, for example:")
+            print("")
+            print("  rsync -a --delete --exclude __pycache__ %s/ %s/"
+                  % (SKILL_DIR, conflicts[0]))
+            print("")
+            print("or pass --allow-shadowing-install to run anyway, accepting that the "
+                  "result describes the installed copy rather than this one.")
+            return 1
 
     print("Running %d case(s) in the %s lane." % (len(cases), args.lane))
     if args.lane == "scanner-only":

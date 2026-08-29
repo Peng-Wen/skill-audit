@@ -23,6 +23,18 @@ It measures the two things the deterministic lane cannot: whether the skill trig
 python3 evals/run_evals.py --lane live --agent claude --trials 5
 ```
 
+The live lane stages this repository's skill at project level inside the
+workspace, but a harness also loads user-level skills, and an installed copy
+of this skill can win that name collision.
+When it does, every live result describes the installed copy rather than the
+working tree, and it does so silently: a stale install once produced
+byte-identical output to a run that reported three passes.
+The runner therefore refuses to start a live lane while a *different* copy is
+installed, naming the path and the `rsync` that resolves it.
+An installed copy identical to the working tree is fine, since either would
+give the same answer, and `--allow-shadowing-install` overrides the check for
+anyone who deliberately wants to measure what is installed.
+
 Any other harness works through a command template containing `{prompt}`:
 
 ```bash

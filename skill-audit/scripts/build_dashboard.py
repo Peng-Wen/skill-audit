@@ -826,20 +826,6 @@ BODY = """
     <div class="gauge" id="gauge"></div>
   </section>
 
-  <section aria-labelledby="steps-h">
-    <div class="section-head">
-      <h2 id="steps-h">Next steps</h2>
-      <button class="send" id="send-steps" type="button"></button>
-      <span class="send-status" id="status-steps" role="status" aria-live="polite"></span>
-    </div>
-    <ol class="steps" id="steps"></ol>
-    <p class="step-note" id="step-note"></p>
-    <details class="prompt-peek" id="peek-steps">
-      <summary>Show the exact text</summary>
-      <pre id="prompt-steps"></pre>
-    </details>
-  </section>
-
   <section aria-labelledby="roster-h">
     <h2 id="roster-h">Skills, worst first</h2>
     <div class="controls">
@@ -853,6 +839,20 @@ BODY = """
       <span class="facet-label">Installed for</span>
     </div>
     <div class="roster" id="roster"></div>
+  </section>
+
+  <section aria-labelledby="steps-h">
+    <div class="section-head">
+      <h2 id="steps-h">Next steps</h2>
+      <button class="send" id="send-steps" type="button"></button>
+      <span class="send-status" id="status-steps" role="status" aria-live="polite"></span>
+    </div>
+    <ol class="steps" id="steps"></ol>
+    <p class="step-note" id="step-note"></p>
+    <details class="prompt-peek" id="peek-steps">
+      <summary>Show the exact text</summary>
+      <pre id="prompt-steps"></pre>
+    </details>
   </section>
 
   <section aria-labelledby="cost-h">

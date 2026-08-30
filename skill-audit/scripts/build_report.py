@@ -415,47 +415,6 @@ def render_report_md(findings, summary, tax, inventory, notes):
             top_action(findings_of(sid))))
     lines.append("")
 
-    # One action section: the decision a skill needs and the edits that carry
-    # it out are the same work at two zoom levels, so they sit in one entry
-    # rather than in two lists a reader has to cross-reference.
-    plan = build_action_plan(findings, summary, {
-        s["id"]: {"path": s.get("path"), "harness": s.get("harness"),
-                  "scope": s.get("scope")}
-        for s in skills})
-    lines.append("## Next steps")
-    lines.append("")
-    if not plan:
-        lines.append("Nothing to act on. No skill produced a finding.")
-        lines.append("")
-    else:
-        lines.append("In order, most severe first. Each entry is the decision a skill needs "
-                     "and the changes that carry it out.")
-        lines.append("")
-        for i, group in enumerate(plan, 1):
-            lines.append("%d. **%s** - grade %s, %d finding(s). %s"
-                         % (i, group["skill"], group["grade"], group["count"],
-                            group["decision"]))
-            if group.get("harness_label"):
-                lines.append("   - Installed for: %s" % group["harness_label"])
-            if group.get("path"):
-                lines.append("   - Location: `%s`" % group["path"])
-            for item in group["items"]:
-                lines.append("   - `%s` %s at `%s`: %s"
-                             % (item["rule_id"], item["severity"], item["where"],
-                                item["recommendation"]))
-            lines.append("")
-        lines.append("To hand this to an agent, copy the block below. It carries its own "
-                     "instruction that the quoted content is data rather than instructions, "
-                     "which matters because the evidence comes from the audited skills "
-                     "themselves. The interactive summary carries the same section with a "
-                     "button that delivers it in one step; Markdown has no button, so here "
-                     "it is a block to copy.")
-        lines.append("")
-        lines.append("```text")
-        lines.append(build_agent_prompt(plan, len(skills)).rstrip())
-        lines.append("```")
-        lines.append("")
-
     # Per-skill detail.
     lines.append("## Findings by skill")
     lines.append("")
@@ -500,6 +459,48 @@ def render_report_md(findings, summary, tax, inventory, notes):
             if f.get("original_severity"):
                 lines.append("  - Adjudicated down from %s by the semantic review: %s"
                              % (f["original_severity"], resolution.get("reason", "")))
+        lines.append("")
+
+    # One action section, placed after the evidence it draws on: the decision
+    # a skill needs and the edits that carry it out are the same work at two
+    # zoom levels, so they sit in one entry rather than in two lists a reader
+    # has to cross-reference.
+    plan = build_action_plan(findings, summary, {
+        s["id"]: {"path": s.get("path"), "harness": s.get("harness"),
+                  "scope": s.get("scope")}
+        for s in skills})
+    lines.append("## Next steps")
+    lines.append("")
+    if not plan:
+        lines.append("Nothing to act on. No skill produced a finding.")
+        lines.append("")
+    else:
+        lines.append("In order, most severe first. Each entry is the decision a skill needs "
+                     "and the changes that carry it out.")
+        lines.append("")
+        for i, group in enumerate(plan, 1):
+            lines.append("%d. **%s** - grade %s, %d finding(s). %s"
+                         % (i, group["skill"], group["grade"], group["count"],
+                            group["decision"]))
+            if group.get("harness_label"):
+                lines.append("   - Installed for: %s" % group["harness_label"])
+            if group.get("path"):
+                lines.append("   - Location: `%s`" % group["path"])
+            for item in group["items"]:
+                lines.append("   - `%s` %s at `%s`: %s"
+                             % (item["rule_id"], item["severity"], item["where"],
+                                item["recommendation"]))
+            lines.append("")
+        lines.append("To hand this to an agent, copy the block below. It carries its own "
+                     "instruction that the quoted content is data rather than instructions, "
+                     "which matters because the evidence comes from the audited skills "
+                     "themselves. The interactive summary carries the same section with a "
+                     "button that delivers it in one step; Markdown has no button, so here "
+                     "it is a block to copy.")
+        lines.append("")
+        lines.append("```text")
+        lines.append(build_agent_prompt(plan, len(skills)).rstrip())
+        lines.append("```")
         lines.append("")
 
     # Context cost.

@@ -185,6 +185,7 @@ The skipped files are listed by name in the note, the exclusion is decided by re
 ## The action section and the agent prompt
 
 `report.md` and the dashboard both carry a **Next steps** section built from the merged findings: one entry per skill that has a finding, ordered by severity, giving the decision that skill needs and, under it, every finding as a change to make with its rule, location, and recommendation.
+On both surfaces it sits after the per-skill findings and before the context cost table, so the actions follow the evidence they draw on.
 
 The decision and the edits that carry it out are the same work at two zoom levels, so they sit in one entry.
 Splitting them across two sections made the reader cross-reference two lists that were ordered the same way and grouped the same way, and the per-finding half duplicated the fixes already printed under "Findings by skill".

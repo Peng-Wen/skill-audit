@@ -178,9 +178,9 @@ but stays in the report.
 Both `scan_findings.json` and the merged `findings.json` carry a `notes` list, and `report.md` prints it under "Method and limitations".
 Notes record anything a reader needs in order to judge coverage rather than risk: a semantic entry that was dropped, a semantic adjudication that lowered or resolved a finding, an adjudication that was refused or dropped, a missing semantic findings file, or a file the scan deliberately skipped.
 
-The scan skips one category of file: the source of the auditor that is executing.
-Its rule tables contain the literal strings it searches for, so scanning them would report the detector's own vocabulary as findings.
-The skipped files are listed by name in the note, the exclusion is decided by resolved path rather than by skill name, and any other copy of the audit tool is scanned in full.
+The scan skips one category of file: the source of the auditor that is executing, together with any file byte-identical to one of its scripts, which is what a second install of the same auditor is made of.
+Its rule tables contain the literal strings it searches for, so scanning them would report the detector's own vocabulary as findings, once per installed copy.
+The skipped files are listed by name in the note, the exclusion is decided by resolved path or byte equality rather than by skill name, and a file that differs from the running auditor at all is scanned in full.
 
 ## The action section and the agent prompt
 
@@ -227,7 +227,7 @@ Detector column values: `det` means the deterministic scanner finds it, `llm` me
 | SEC008 | graded by target: critical for a root or home wipe, high for another absolute or home-rooted path, low for a scratch or relative target, info in advisory or defensive prose | det | Commands that destroy data or force-overwrite history. Both `-rf` and `-fr` flag orders count. A line that argues against such a command, or blocks or warns about it, is advisory context and drops to info. |
 | SEC009 | high | det | Changes that make something run outside the current task, such as startup files, scheduled jobs, or hooks. |
 | SEC010 | medium, high alongside manipulation | det+llm | Instructions aimed at the agent placed outside SKILL.md, so a reviewer reading only SKILL.md misses them. The deterministic rule fires only when the file also carries another security signal or injection phrasing, since second-person imperatives alone are ordinary reference-file style. |
-| SEC011 | medium, high alongside network activity | det | A compiled executable bundled with the skill instead of readable source. |
+| SEC011 | medium, high alongside network activity | det | A compiled executable bundled with the skill instead of readable source, including Python bytecode caches, which Python loads in place of the source they sit beside. |
 | SEC012 | high | det+llm | Behavior fetched from a remote source at run time, which can change after review. |
 | SEC013 | medium, high with interpolated input | det | Dynamic evaluation of code or shell strings. |
 
@@ -270,7 +270,7 @@ Detector column values: `det` means the deterministic scanner finds it, `llm` me
 | Rule | Severity | Detector | What it means |
 | --- | --- | --- | --- |
 | QUAL001 | low | llm with a deterministic prefilter | A description too vague to trigger the skill reliably. |
-| QUAL002 | low, medium when nearly identical | det+llm | Two skills competing for the same triggers. |
+| QUAL002 | low, medium when nearly identical | det+llm | Two skills competing for the same triggers. Two installs sharing a name and an exact description are one skill installed twice, not a competition, and are not flagged. |
 | QUAL003 | medium, high when unjustified | det+llm | Privileges wider than the stated purpose requires. |
 
 ## Risks that a file scan cannot answer

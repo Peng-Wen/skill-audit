@@ -70,11 +70,12 @@ The skill grades A against its own rules, and an eval invariant fails the build 
 
 Getting there needed one structural decision.
 The scanner's rule tables spell out the strings it hunts for, including credential paths, exfiltration phrases, and pipe-to-shell shapes, so scanning them reported the detector's own vocabulary as if it were behavior.
-The scanner therefore skips the source of the auditor that is executing, names every file it skipped in the report, and gives up nothing by doing so: this is code you already chose to run, and a tampered copy would control the report whether or not it scanned itself.
+The scanner therefore skips the source of the auditor that is executing, and any file byte-identical to one of its scripts, which is what a second install of the auditor for another harness is made of.
+It names every file it skipped in the report, and gives up nothing by doing so: identical bytes are code you already chose to run, and a tampered copy would control the report whether or not it scanned itself.
 
-The exclusion is decided by resolved path, never by name, so taking the name `skill-audit` buys an attacker nothing.
+The exclusion is decided by resolved path or byte equality, never by name, so taking the name `skill-audit` buys an attacker nothing.
 A second invariant proves it.
-It copies the skill elsewhere, scans the copy with the original, and fails if the copy comes back clean.
+It copies the skill elsewhere, changes one file, scans the copy with the original, and fails unless the changed file is reported in full and the unchanged ones are named as skipped rather than silently passed.
 That is what makes vetting a downloaded fork with `--skill` a real check rather than a formality.
 
 The remaining invariant is the older one.

@@ -15,16 +15,11 @@ Copy the `skill-audit/` directory into any skills location your harness reads, s
 Install it at the user level rather than per project, since it audits everything the machine can load:
 
 ```bash
-rsync -a --delete --exclude __pycache__ skill-audit/ ~/.claude/skills/skill-audit/
+rsync -a --delete skill-audit/ ~/.claude/skills/skill-audit/
 ```
 
-The same command updates an existing installation, and `--delete` removes files dropped since the previous version.
-Running the scripts leaves compiled bytecode in `scripts/__pycache__/`, which `--exclude` also protects from that delete.
-Python never runs bytecode that no longer matches its source, so clearing it after an update is tidiness rather than a correctness fix:
-
-```bash
-find ~/.claude/skills/skill-audit -name __pycache__ -type d -exec rm -rf {} +
-```
+The same command updates an existing installation, and `--delete` removes files dropped since the previous version, including any `scripts/__pycache__/` an older version left behind.
+The scripts refuse to write bytecode caches, precisely so that running the audit never plants opaque `.pyc` files inside the installed bundle for the next audit to flag as SEC011.
 
 ## Verifying the installed copy
 
@@ -34,8 +29,8 @@ To confirm the installed copy is the one you meant to install:
 diff -rq --exclude=__pycache__ skill-audit/ ~/.claude/skills/skill-audit/ && echo "in sync"
 ```
 
-The scanner excludes only the copy that is currently executing, and it decides that by resolved path rather than by name.
-So you can point it at any other copy, including a fork you are thinking about installing, and get a real audit rather than a formality:
+The scanner excludes the copy that is currently executing, decided by resolved path, and any file byte-identical to one of its own scripts, which is what a second install of this auditor is made of; never anything by name.
+So you can point it at a fork you are thinking about installing and get a real audit rather than a formality, because every file that differs at all is scanned in full:
 
 ```bash
 python3 skill-audit/scripts/scan_skill.py --skill ~/Downloads/some-skill-audit-fork --out findings.json

@@ -18,9 +18,16 @@ Usage:
 import argparse
 import base64
 import binascii
+import hashlib
 import os
 import re
 import sys
+
+# Set before any local import: importing a sibling module is what writes
+# __pycache__, and when these scripts run from an installed skill directory
+# that cache lands inside the very bundle the audit inspects, where the next
+# audit rightly reports it as opaque bytecode (SEC011).
+sys.dont_write_bytecode = True
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -90,13 +97,61 @@ def is_auditor_own_source(path):
     execute, so a tampered copy would control the report whether or not it
     scanned itself; a scanner cannot vouch for itself by reading itself.
 
-    The test is identity by resolved path, never by skill name, so any other
-    copy of this skill - a fork, a clone waiting to be vetted, a directory that
-    merely calls itself skill-audit - is scanned in full like anything else.
+    The test is identity by resolved path, never by skill name, so a directory
+    that merely calls itself skill-audit is scanned in full like anything else.
     Every excluded file is named in the scan output so the omission is visible.
     """
     real = os.path.realpath(path)
     return real == SELF_SCRIPTS_DIR or real.startswith(SELF_SCRIPTS_DIR + os.sep)
+
+
+def _self_script_digests():
+    """Sizes and digests of the running scanner's own script files.
+
+    Used to recognize another install of this same auditor: a machine that runs
+    two harnesses typically carries one copy per harness, and pattern-scanning
+    the twin reports the executing code's own rule vocabulary as findings for
+    every copy but the one that happens to be running.
+
+    Identity is byte equality, decided per file. A byte-identical file is the
+    code the user already chose to execute, so skipping its pattern scan gives
+    up nothing, while a fork or a tampered copy differs somewhere and every
+    file that differs is scanned in full. The bytecode cache is left out of the
+    digest set: a .pyc is never source vocabulary, and a bundled one should be
+    reported wherever it is found.
+    """
+    digests = {}
+    for dirpath, dirnames, filenames in os.walk(SELF_SCRIPTS_DIR):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for fname in filenames:
+            full = os.path.join(dirpath, fname)
+            try:
+                with open(full, "rb") as fh:
+                    payload = fh.read()
+            except OSError:
+                continue
+            digests.setdefault(len(payload), set()).add(
+                hashlib.sha256(payload).hexdigest())
+    return digests
+
+
+_SELF_DIGESTS = None
+
+
+def is_identical_to_own_script(path, size):
+    """True when a file is byte-for-byte one of the running scanner's scripts."""
+    global _SELF_DIGESTS
+    if _SELF_DIGESTS is None:
+        _SELF_DIGESTS = _self_script_digests()
+    expected = _SELF_DIGESTS.get(size)
+    if not expected:
+        return False
+    try:
+        with open(path, "rb") as fh:
+            payload = fh.read()
+    except OSError:
+        return False
+    return hashlib.sha256(payload).hexdigest() in expected
 
 
 def _c(pattern):
@@ -1012,6 +1067,17 @@ def check_description_collisions(inventory, threshold=0.6):
             b, tb = entries[j]
             if not ta or not tb:
                 continue
+            # The same skill installed in two places - one copy per harness, or
+            # a user install beside a plugin install - shares its name and its
+            # exact description. That is duplication, not two skills competing
+            # for a trigger: whichever copy a harness picks, the description
+            # promises the same behavior. A same-named skill whose description
+            # differs at all is still compared, since divergence is exactly
+            # what makes two same-named installs worth a look.
+            if (a["name"] == b["name"]
+                    and (a["frontmatter"].get("raw") or {}).get("description")
+                    == (b["frontmatter"].get("raw") or {}).get("description")):
+                continue
             overlap = len(ta & tb)
             union = len(ta | tb)
             similarity = overlap / union if union else 0.0
@@ -1087,6 +1153,7 @@ def scan_inventory(inventory, cap_bytes=DEFAULT_CAP_BYTES, known_names=None):
     findings = []
     notes = []
     skipped_self = []
+    skipped_identical = []
     known_names = known_names if known_names is not None else set()
 
     for skill in inventory["skills"]:
@@ -1099,8 +1166,14 @@ def scan_inventory(inventory, cap_bytes=DEFAULT_CAP_BYTES, known_names=None):
             if f["kind"] == "binary":
                 continue
             full = os.path.join(skill["path"], f["path_rel"])
+            # Named by skill id rather than display name: two installs of the
+            # auditor share a name, and the note has to say which copy each
+            # skipped file belongs to.
             if is_auditor_own_source(full):
-                skipped_self.append("%s/%s" % (skill["name"], f["path_rel"]))
+                skipped_self.append("%s: %s" % (skill["id"], f["path_rel"]))
+                continue
+            if is_identical_to_own_script(full, f["bytes"]):
+                skipped_identical.append("%s: %s" % (skill["id"], f["path_rel"]))
                 continue
             text, _ = read_text_capped(full, cap_bytes)
             if not text:
@@ -1127,9 +1200,17 @@ def scan_inventory(inventory, cap_bytes=DEFAULT_CAP_BYTES, known_names=None):
         notes.append(
             "pattern rules skipped %d file(s) belonging to the running auditor "
             "itself, because its rule tables contain the strings it searches for: "
-            "%s. Structural checks still covered them, and any other copy of this "
-            "skill is scanned in full."
+            "%s. Structural checks still covered them, and a copy of this skill "
+            "is scanned in full wherever its content differs."
             % (len(skipped_self), ", ".join(sorted(skipped_self))))
+    if skipped_identical:
+        notes.append(
+            "pattern rules skipped %d file(s) byte-identical to the running "
+            "auditor's own scripts, which carry the strings the rules search "
+            "for: %s. Structural checks still covered them, and a file that "
+            "differs from the running auditor by even one byte is scanned in "
+            "full."
+            % (len(skipped_identical), ", ".join(sorted(skipped_identical))))
 
     return findings, notes
 

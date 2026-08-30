@@ -27,6 +27,12 @@ import json
 import os
 import sys
 
+# Set before any local import: importing a sibling module is what writes
+# __pycache__, and when these scripts run from an installed skill directory
+# that cache lands inside the very bundle the audit inspects, where the next
+# audit rightly reports it as opaque bytecode (SEC011).
+sys.dont_write_bytecode = True
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from skill_audit_lib import (  # noqa: E402

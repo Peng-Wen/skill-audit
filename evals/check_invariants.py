@@ -14,6 +14,11 @@ import shutil
 import subprocess
 import sys
 
+# Importing the shipped scripts is what writes __pycache__, and writing it into
+# the shipped skill directory would plant the very bytecode bundle (SEC011)
+# that the self-audit below must find absent.
+sys.dont_write_bytecode = True
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 SKILL_DIR = os.path.join(REPO, "skill-audit")
@@ -71,7 +76,7 @@ def check_skill_frontmatter(failures):
 
 
 def _scan(scanner_dir, target_dir, out_name):
-    """Run one scanner over one skill directory and return its findings."""
+    """Run one scanner over one skill directory and return the findings doc."""
     import json
     scratch = os.environ.get("TMPDIR", "/tmp")
     out = os.path.join(scratch, out_name)
@@ -80,7 +85,7 @@ def _scan(scanner_dir, target_dir, out_name):
          "--skill", target_dir, "--out", out, "--quiet"],
         check=True)
     with io.open(out, encoding="utf-8") as fh:
-        return json.load(fh).get("findings", [])
+        return json.load(fh)
 
 
 def check_self_audit_clean(failures):
@@ -91,7 +96,8 @@ def check_self_audit_clean(failures):
     counted here are the ones any user would see: zero is the only acceptable
     number, and the fix is always the skill's own wording, never a weaker rule.
     """
-    findings = _scan(SCRIPTS, SKILL_DIR, "skill-audit-self-check.json")
+    findings = _scan(SCRIPTS, SKILL_DIR,
+                     "skill-audit-self-check.json").get("findings", [])
     if findings:
         failures.append(
             "the shipped skill does not audit clean, %d finding(s): %s. Fix the "
@@ -103,13 +109,17 @@ def check_self_audit_clean(failures):
 
 
 def check_self_exclusion_is_identity_based(failures):
-    """A copy of this skill must still be scanned in full.
+    """The self-exclusion must track content identity, never the name.
 
-    The scanner skipping its own source is safe only while the test is "is this
-    the code I am executing", decided by resolved path. If it ever degrades into
+    The scanner skips its own executing source and any byte-identical copy of
+    its scripts, because both are the code the user already chose to run. That
+    is safe only while the test really is identity: if it ever degrades into
     "is this named skill-audit", any skill could take the name and buy silence.
-    Copying the skill elsewhere and scanning it with the original proves the
-    difference: the copy is a different path, so its rule tables get reported.
+    Two probes pin the boundary from both sides. An untouched copy has to come
+    back with no pattern findings in scripts/ but with every skipped file named
+    in the notes, so the skip is visible rather than silent. The same copy with
+    one script modified has to report that script's rule tables in full, which
+    is what makes vetting a fork with --skill a real check.
     """
     scratch = os.environ.get("TMPDIR", "/tmp")
     copy_dir = os.path.join(scratch, "skill-audit-copy-check", "skill-audit")
@@ -118,18 +128,36 @@ def check_self_exclusion_is_identity_based(failures):
     shutil.copytree(SKILL_DIR, copy_dir,
                     ignore=shutil.ignore_patterns("__pycache__"))
     try:
-        findings = _scan(SCRIPTS, copy_dir, "skill-audit-copy-check.json")
+        doc = _scan(SCRIPTS, copy_dir, "skill-audit-copy-check.json")
+        identical = [f for f in doc.get("findings", [])
+                     if (f.get("file") or "").startswith("scripts/")]
+        if identical:
+            failures.append(
+                "a byte-identical copy of this skill reported pattern findings "
+                "in scripts/: %s. Files equal to the running auditor's own "
+                "scripts are supposed to be skipped as detector vocabulary."
+                % "; ".join(sorted({f["rule_id"] for f in identical})))
+        noted = [n for n in doc.get("notes", []) if "byte-identical" in n]
+        if not noted:
+            failures.append(
+                "the scan of a byte-identical copy did not name the skipped "
+                "files in its notes; the skip has to be visible, never silent.")
+
+        # One changed byte has to void the exemption for that file.
+        probe = os.path.join(copy_dir, "scripts", "scan_skill.py")
+        with io.open(probe, "a", encoding="utf-8") as fh:
+            fh.write("\n# fork probe: this copy differs from the running auditor\n")
+        doc = _scan(SCRIPTS, copy_dir, "skill-audit-fork-check.json")
+        in_scripts = [f for f in doc.get("findings", [])
+                      if (f.get("file") or "").startswith("scripts/")]
+        if not in_scripts:
+            failures.append(
+                "a modified copy of this skill scanned clean. A file that "
+                "differs from the running auditor must be scanned in full, so "
+                "its rule tables have to be reported. Check that the identity "
+                "test compares content hashes and not skill names.")
     finally:
         shutil.rmtree(os.path.dirname(copy_dir), ignore_errors=True)
-
-    in_scripts = [f for f in findings if (f.get("file") or "").startswith("scripts/")]
-    if not in_scripts:
-        failures.append(
-            "a separate copy of this skill scanned clean. The self-exclusion is "
-            "supposed to cover only the executing scanner's own path, so a copy "
-            "must still report the pattern strings in its scripts/ directory. "
-            "Check that is_auditor_own_source() compares resolved paths and not "
-            "skill names.")
     return len(in_scripts)
 
 
@@ -468,7 +496,7 @@ def main():
           "discovery reach, per-harness search coverage, id uniqueness, "
           "backstop evasions, rubric weights.")
     print("Self-audit: %d finding(s) against the running scanner (must be 0); "
-          "%d finding(s) when a copy is scanned (must be above 0)."
+          "%d finding(s) when a modified copy is scanned (must be above 0)."
           % (own, copied))
 
     if failures:

@@ -26,6 +26,10 @@ import json
 import os
 import sys
 
+# Keep imports of the shipped scripts from writing __pycache__ into the
+# shipped skill directory, where the audit would report it as bytecode.
+sys.dont_write_bytecode = True
+
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "skill-audit", "scripts"))

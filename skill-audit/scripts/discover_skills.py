@@ -19,6 +19,12 @@ import os
 import platform
 import sys
 
+# Set before any local import: importing a sibling module is what writes
+# __pycache__, and when these scripts run from an installed skill directory
+# that cache lands inside the very bundle the audit inspects, where the next
+# audit rightly reports it as opaque bytecode (SEC011).
+sys.dont_write_bytecode = True
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from skill_audit_lib import (  # noqa: E402
@@ -40,6 +46,13 @@ MAX_FILES_PER_SKILL = 500
 
 # Directories that never contain skill content worth inventorying.
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache"}
+
+# When listing the files a skill actually bundles, __pycache__ is not noise:
+# Python loads a cached .pyc in place of its source when the recorded mtime and
+# size line up, so a planted or stale cache is executable payload the source
+# never shows. It stays out of SKIP_DIRS above only for the walk that looks
+# for skill directories, where descending into it cannot find one.
+COLLECT_SKIP_DIRS = SKIP_DIRS - {"__pycache__"}
 
 
 # Project-level skill directories, relative to a directory being considered.
@@ -243,7 +256,7 @@ def collect_files(skill_dir):
             dirnames[:] = []
             continue
         visited.add(real)
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        dirnames[:] = sorted(d for d in dirnames if d not in COLLECT_SKIP_DIRS)
         for fname in sorted(filenames):
             full = os.path.join(dirpath, fname)
             rel = os.path.relpath(full, skill_dir)

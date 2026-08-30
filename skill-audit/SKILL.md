@@ -157,7 +157,8 @@ Isolation, governance, and cross-harness permission differences are properties o
 ## A note on auditing this skill
 
 The scanner does not run its pattern rules over its own executing source, because its rule tables spell out the exact strings it searches for and matching them reports the detector's vocabulary as if it were behavior.
-Every file skipped that way is named in the scan output and in the report, so the omission is visible rather than silent.
+The same skip applies to a file that is byte-for-byte identical to one of the executing scripts, which is what another install of this auditor for a second harness is made of.
+Every file skipped either way is named in the scan output and in the report, so the omission is visible rather than silent.
 
-The exclusion is by resolved path, never by skill name, and it gives up nothing: this is code the user already chose to run, so a tampered copy would control the report whether or not it scanned itself.
-Any other copy of this skill is audited in full, which is what makes `--skill /path/to/a/downloaded/skill-audit` a real check on a fork rather than a formality.
+The exclusion is by resolved path or by byte equality, never by skill name, and it gives up nothing: identical bytes are the code the user already chose to run, and a tampered copy would control the report whether or not it scanned itself.
+Every file that differs from the running auditor by even one byte is audited in full, which is what makes `--skill /path/to/a/downloaded/skill-audit` a real check on a fork rather than a formality.

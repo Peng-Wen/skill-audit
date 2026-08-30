@@ -35,6 +35,11 @@ import subprocess
 import sys
 import time
 
+# Importing the shipped scripts is what writes __pycache__, and writing it into
+# the shipped skill directory would plant the bytecode bundle (SEC011) that the
+# invariants and fixtures expect to be absent.
+sys.dont_write_bytecode = True
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 SKILL_DIR = os.path.join(REPO, "skill-audit")

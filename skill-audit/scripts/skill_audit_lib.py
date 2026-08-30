@@ -665,6 +665,99 @@ def grade_for(counts):
 
 
 # ---------------------------------------------------------------------------
+# Harnesses.
+# ---------------------------------------------------------------------------
+
+# Discovery attributes a skill to the harness that owns the directory it was
+# found in, and records that as a slug. Every reader-facing surface prints the
+# name the harness actually goes by instead, so a report says "Claude Code"
+# rather than "claude".
+HARNESS_LABELS = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "opencode": "OpenCode",
+    "cursor": "Cursor",
+    "gemini": "Gemini CLI",
+    "openclaw": "OpenClaw",
+    # Not a harness: the directory convention several harnesses read in common.
+    # harnesses.md uses the same wording for it.
+    "shared": "Shared convention",
+}
+
+# When there is no harness to name, the scope says why. A single directory
+# passed with --skill is the pre-install case, and the honest answer there is
+# that nothing has it installed yet.
+_UNKNOWN_HARNESS_LABELS = {
+    "explicit": "Not installed",
+    "override": "Custom path",
+}
+
+HARNESS_NOTE = (
+    "The harness named for a skill is the one whose directory it was found in. "
+    "Several harnesses also read each other's skill directories, so a skill "
+    "installed for one can load in another."
+)
+
+
+def is_named_harness(harness):
+    """Whether discovery could attribute a skill to a harness at all.
+
+    Only --skill and --paths produce skills without one; every default search
+    root belongs to a harness. Surfaces that would otherwise print "Installed
+    for: Not installed" use this to say something truthful instead.
+    """
+    slug = str(harness or "").strip().lower()
+    return bool(slug) and slug != "unknown"
+
+
+def harness_label(harness, scope=None):
+    """Reader-facing name for the harness a skill is installed for.
+
+    An unrecognized slug is returned as it stands rather than hidden behind
+    "unknown": discovery can be pointed at any root, and a slug a caller
+    supplied is more informative than a placeholder.
+    """
+    slug = str(harness or "").strip().lower()
+    if slug and slug != "unknown":
+        return HARNESS_LABELS.get(slug, slug)
+    return _UNKNOWN_HARNESS_LABELS.get(scope, "Unknown")
+
+
+def harness_display(harness, scope=None):
+    """The harness name with the scope that qualifies it, for one-line use.
+
+    The scope is what separates two installs of the same skill under the same
+    harness, so "Claude Code (plugin)" and "Claude Code (user)" are different
+    answers to "where is this installed".
+    """
+    label = harness_label(harness, scope)
+    if scope and scope not in ("explicit", "override"):
+        return "%s (%s)" % (label, scope)
+    return label
+
+
+def harness_breakdown(entries):
+    """Count skills per harness, most-installed first.
+
+    entries is an iterable of dicts carrying "harness" and, optionally,
+    "scope". The scope only qualifies an entry that has no harness to name, so
+    installs of one harness stay in one bucket however they were installed.
+    """
+    counts = {}
+    for entry in entries:
+        harness = entry.get("harness")
+        scope = entry.get("scope")
+        label = harness_label(harness, scope)
+        slug = str(harness or "unknown").strip().lower()
+        key = (label, slug)
+        counts[key] = counts.get(key, 0) + 1
+    rows = [{"label": label, "harness": slug, "count": n}
+            for (label, slug), n in counts.items()]
+    rows.sort(key=lambda r: (-r["count"], r["label"]))
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Findings.
 # ---------------------------------------------------------------------------
 
@@ -801,17 +894,19 @@ def fence_safe(text):
     return out.replace("```", "'''").strip()
 
 
-def build_action_plan(findings, summary, paths=None):
+def build_action_plan(findings, summary, skill_info=None):
     """One ordered list of what to do, worst skill first.
 
     The decision for a skill and the edits that carry it out are the same piece
     of work seen at two zoom levels, so they live in one entry rather than in
     two lists a reader has to cross-reference.
 
-    Grouping is by skill id, and each entry carries the skill's path when the
-    caller supplies an id-to-path mapping: names can collide across scopes, and
-    whoever acts on the plan needs to know which directory it is about.
-    Findings resolved by an adjudication are not action items and are skipped.
+    Grouping is by skill id, and each entry carries the skill's location when
+    the caller supplies skill_info, a mapping of skill id to a dict with
+    "path", "harness", and "scope": names can collide across scopes, and
+    whoever acts on the plan needs to know which directory, under which
+    harness, it is about. Findings resolved by an adjudication are not action
+    items and are skipped.
     """
     by_skill = {}
     for f in findings:
@@ -841,10 +936,20 @@ def build_action_plan(findings, summary, paths=None):
                 "recommendation": f.get("recommendation", ""),
             })
 
+        where_installed = (skill_info or {}).get(sid) or {}
         plan.append({
             "skill": info.get("name") or sid,
             "skill_id": sid,
-            "path": (paths or {}).get(sid),
+            "path": where_installed.get("path"),
+            "harness": where_installed.get("harness"),
+            "scope": where_installed.get("scope"),
+            # A skill that is not installed anywhere has a path and nothing
+            # else to say, so the label is left off rather than filled with a
+            # placeholder the prompt would then have to explain.
+            "harness_label": (
+                harness_display(where_installed.get("harness"),
+                                where_installed.get("scope"))
+                if is_named_harness(where_installed.get("harness")) else None),
             "grade": grade,
             "severity": entries[0]["severity"],
             "headline": RULES.get(entries[0]["rule_id"], {}).get("title", entries[0]["rule_id"]),
@@ -876,6 +981,11 @@ def build_agent_prompt(plan, skill_count):
         lines.append("%d. [%s] %s (grade %s, %d finding(s))"
                      % (i, group["severity"].upper(), fence_safe(group["skill"]),
                         group["grade"], group["count"]))
+        # The harness is part of the address of a skill, not decoration: the
+        # same name can be installed under two of them, and an agent editing
+        # the wrong copy leaves the finding in place.
+        if group.get("harness_label"):
+            lines.append("   Installed for: %s" % fence_safe(group["harness_label"]))
         if group.get("path"):
             lines.append("   Location: %s" % fence_safe(group["path"]))
         lines.append("   Decision: %s" % fence_safe(group["decision"]))

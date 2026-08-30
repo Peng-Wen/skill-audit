@@ -46,11 +46,13 @@ The deterministic layer is the backstop underneath all of that: it still reports
 
 `report.md` is the full record, and `findings.json` is the same result as data.
 
+Every skill is named with the harness it is installed for, so an audit of a machine running two agents never leaves you guessing which set of skills a finding belongs to.
+
 `report.md` carries a **Next steps** section alongside the evidence: the skills that need a decision, worst first, each with the changes that carry that decision out.
 It ends with a ready-made block to hand to an agent.
 That block quotes evidence taken from the audited skills, so it opens by saying the quoted content is data rather than instructions, and the generator breaks up any text inside it that tries to close the data fence early.
 
-Alongside them the audit renders an interactive summary: severity totals, a grade per skill with its findings and quoted evidence, filtering by severity or free text, and the context cost table.
+Alongside them the audit renders an interactive summary: severity totals, a grade per skill with its findings and quoted evidence, filtering by severity, harness, or free text, and the context cost table.
 It is one HTML file with no build step, no dependencies, and no network requests of any kind.
 A page that fetched a font or a script from a remote host would contradict the guarantee the audit itself makes.
 

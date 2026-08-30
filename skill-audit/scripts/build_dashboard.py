@@ -30,10 +30,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from skill_audit_lib import (  # noqa: E402
+    HARNESS_NOTE,
     RULES,
     SEVERITIES,
     build_action_plan,
     build_agent_prompt,
+    harness_breakdown,
+    harness_label,
     iso_local_now,
     local_now,
     read_json,
@@ -62,9 +65,12 @@ def build_data(findings_doc, inventory, title):
     # other's grade.
     paths = {}
     file_counts = {}
+    installed_for = {}
     for skill in (inventory or {}).get("skills", []):
         paths[skill["id"]] = skill.get("path")
         file_counts[skill["id"]] = len(skill.get("files", []))
+        installed_for[skill["id"]] = {"harness": skill.get("harness"),
+                                      "scope": skill.get("scope")}
 
     cost_rows = {row.get("skill_id") or row["skill"]: row
                  for row in cost.get("rows", [])}
@@ -74,8 +80,14 @@ def build_data(findings_doc, inventory, title):
         grouped.setdefault(f.get("skill_id") or f.get("skill"), []).append(f)
 
     skills = []
+    where_by_id = {}
     for sid, info in summary.get("by_skill", {}).items():
         row = cost_rows.get(sid, {})
+        # The inventory is the better source, but the page is also built from
+        # findings.json alone, and the cost rows carry the same two fields.
+        where = installed_for.get(sid) or {"harness": row.get("harness"),
+                                           "scope": row.get("scope")}
+        where_by_id[sid] = where
         entries = sorted(grouped.get(sid, []),
                          key=lambda f: (f.get("status") == "resolved",
                                         -severity_rank(f["severity"]),
@@ -86,7 +98,11 @@ def build_data(findings_doc, inventory, title):
             "grade": info.get("grade", "A"),
             "counts": info.get("counts", {}),
             "resolved": info.get("resolved", 0),
-            "harness": row.get("harness", "unknown"),
+            "harness": where.get("harness") or "unknown",
+            # The label is what the page shows and filters on; the scope
+            # separates two installs of one skill under the same harness.
+            "harness_label": harness_label(where.get("harness"), where.get("scope")),
+            "scope": where.get("scope"),
             "path": paths.get(sid),
             "files": file_counts.get(sid),
             "always_on_tokens": row.get("always_on_tokens", 0),
@@ -112,7 +128,10 @@ def build_data(findings_doc, inventory, title):
 
     skills.sort(key=lambda s: (GRADE_ORDER.get(s["grade"], 5), s["name"], s["id"]))
 
-    plan = build_action_plan(findings, summary, paths)
+    plan = build_action_plan(findings, summary, {
+        sid: {"path": paths.get(sid), "harness": where.get("harness"),
+              "scope": where.get("scope")}
+        for sid, where in where_by_id.items()})
 
     return {
         "title": title,
@@ -124,6 +143,8 @@ def build_data(findings_doc, inventory, title):
         "totals": summary.get("totals", {sev: 0 for sev in SEVERITIES}),
         "always_on_total": cost.get("always_on_total", 0),
         "skill_count": len(skills),
+        "harnesses": harness_breakdown(skills),
+        "harness_note": HARNESS_NOTE,
         "skills": skills,
         "notes": findings_doc.get("notes") or [],
         "action_plan": plan,
@@ -367,6 +388,42 @@ h2 {
   font-variant-numeric: tabular-nums;
 }
 
+/* Harness facet: which agent each skill is installed for, as a filter. */
+.facets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: -4px 0 14px;
+}
+.facet-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.chip {
+  appearance: none;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.chip:hover { color: var(--text); border-color: var(--accent); }
+.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-sunk);
+  color: var(--accent);
+  font-weight: 700;
+}
+.chip .n { color: var(--text-muted); font-weight: 400; }
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -410,11 +467,30 @@ h2 {
   background: var(--surface-sunk);
 }
 
+.skill-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 9px;
+}
 .skill-name {
   font-family: var(--mono);
   font-size: 15px;
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+/* The harness a skill is installed for reads as part of its identity, not as
+   another metric, so it sits beside the name rather than among the pills. */
+.harness-badge {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
 }
 .skill-sub {
   font-family: var(--mono);
@@ -533,6 +609,7 @@ h2 {
   font-variant-numeric: tabular-nums;
 }
 .cost-row .label { overflow-wrap: anywhere; }
+.cost-row .label .harness { display: block; color: var(--text-muted); font-size: 11px; }
 .bar {
   height: 9px;
   background: var(--surface-sunk);
@@ -766,6 +843,9 @@ BODY = """
       <button class="btn" id="reset" type="button">Reset</button>
       <span class="count-note" id="count-note"></span>
     </div>
+    <div class="facets" id="harness-facets" hidden>
+      <span class="facet-label">Installed for</span>
+    </div>
     <div class="roster" id="roster"></div>
   </section>
 
@@ -814,6 +894,8 @@ SCRIPT = r"""
   };
 
   var active = {};
+  /* Harness labels the reader has narrowed to. Empty means every harness. */
+  var harnessOn = {};
   var query = "";
   var expanded = false;
   /* Cards the reader opened or closed by hand. Kept across re-renders so
@@ -833,6 +915,20 @@ SCRIPT = r"""
 
   function sevFilterOn() {
     return SEV.some(function (s) { return active[s]; });
+  }
+
+  function harnessFilterOn() {
+    return Object.keys(harnessOn).some(function (h) { return harnessOn[h]; });
+  }
+
+  /* Which harness a skill is installed for is a property of the skill, so it
+     narrows the roster before any per-finding filter is considered. The label
+     indexes a plain object, so the lookup is guarded the way every other
+     lookup keyed by audited data is. */
+  function harnessMatches(skill) {
+    if (!harnessFilterOn()) { return true; }
+    return Object.prototype.hasOwnProperty.call(harnessOn, skill.harness_label) &&
+      !!harnessOn[skill.harness_label];
   }
 
   /* Masthead ---------------------------------------------------------- */
@@ -865,8 +961,17 @@ SCRIPT = r"""
     }
   }
 
+  var harnesses = data.harnesses || [];
+  /* A skill audited straight from a path has no harness to count, so the
+     masthead says nothing rather than counting a placeholder. */
+  var harnessSummary = harnesses.filter(function (h) {
+    return h.harness && h.harness !== "unknown";
+  }).map(function (h) {
+    return h.label + " " + h.count;
+  }).join(", ");
   document.getElementById("meta").textContent =
-    plural(data.skill_count, "skill") + " audited · generated " + localStamp();
+    plural(data.skill_count, "skill") + " audited" +
+    (harnessSummary ? " · " + harnessSummary : "") + " · generated " + localStamp();
 
   /* Severity gauge ---------------------------------------------------- */
 
@@ -895,6 +1000,7 @@ SCRIPT = r"""
     var counts = {};
     SEV.forEach(function (sev) { counts[sev] = 0; });
     data.skills.forEach(function (skill) {
+      if (!harnessMatches(skill)) { return; }
       skill.findings.forEach(function (f) {
         if (f.status === "resolved") { return; }
         if (textMatchesFinding(skill, f)) { counts[f.severity] = (counts[f.severity] || 0) + 1; }
@@ -929,9 +1035,14 @@ SCRIPT = r"""
     return parts.join("  ").toLowerCase().indexOf(query) !== -1;
   }
 
+  function skillText(skill) {
+    return [skill.name, skill.harness, skill.harness_label || "",
+            skill.scope || "", skill.path || ""];
+  }
+
   function textMatchesFinding(skill, f) {
-    return textMatch([skill.name, skill.harness, skill.path || "", f.rule_id, f.title,
-                      f.file || "", f.evidence, f.recommendation, f.detector]);
+    return textMatch(skillText(skill).concat(
+      [f.rule_id, f.title, f.file || "", f.evidence, f.recommendation, f.detector]));
   }
 
   function findingMatches(skill, f) {
@@ -948,6 +1059,8 @@ SCRIPT = r"""
     var parts = [];
     var chosen = SEV.filter(function (s) { return active[s]; });
     if (chosen.length) { parts.push(chosen.join(" or ")); }
+    var onHarness = Object.keys(harnessOn).filter(function (h) { return harnessOn[h]; });
+    if (onHarness.length) { parts.push(onHarness.join(" or ")); }
     if (query) { parts.push("\u201c" + query + "\u201d"); }
     return parts.join(" and ");
   }
@@ -1031,10 +1144,17 @@ SCRIPT = r"""
     summary.appendChild(grade);
 
     var mid = el("div");
-    mid.appendChild(el("div", "skill-name", skill.name));
-    var sub = [skill.harness];
+    var headline = el("div", "skill-headline");
+    headline.appendChild(el("span", "skill-name", skill.name));
+    var badge = el("span", "harness-badge", skill.harness_label);
+    badge.title = "Installed for " + skill.harness_label +
+      (skill.scope ? ", " + skill.scope + " scope" : "") + ". " + (data.harness_note || "");
+    headline.appendChild(badge);
+    mid.appendChild(headline);
+    var sub = [];
+    if (skill.scope) { sub.push(skill.scope + " scope"); }
     if (skill.path) { sub.push(skill.path); }
-    mid.appendChild(el("div", "skill-sub", sub.join("  ·  ")));
+    if (sub.length) { mid.appendChild(el("div", "skill-sub", sub.join("  ·  "))); }
     summary.appendChild(mid);
 
     var pills = el("div", "pills");
@@ -1075,13 +1195,15 @@ SCRIPT = r"""
     var totalFindings = 0;
 
     data.skills.forEach(function (skill) {
+      /* Counted before the harness facet narrows the roster, so the note
+         below compares what is on screen against the whole audit. */
       totalFindings += skill.findings.length;
+      if (!harnessMatches(skill)) { return; }
       var shown = skill.findings.filter(function (f) { return findingMatches(skill, f); });
       if (filtering && !shown.length) {
         // A text search still keeps a skill whose own name or path matches, so
         // searching for a skill shows it even when it has no findings at all.
-        var keepByName = !sevFilterOn() &&
-          textMatch([skill.name, skill.harness, skill.path || ""]);
+        var keepByName = !sevFilterOn() && textMatch(skillText(skill));
         if (!keepByName) { return; }
       }
       visible += 1;
@@ -1095,12 +1217,46 @@ SCRIPT = r"""
         label ? ("No findings match " + label + ".") : "Nothing to show."));
     }
 
-    document.getElementById("count-note").textContent = filtering
+    document.getElementById("count-note").textContent = (filtering || harnessFilterOn())
       ? (shownFindings + " of " + plural(totalFindings, "finding") + " · " +
          visible + " of " + plural(data.skills.length, "skill"))
       : (plural(visible, "skill") + " · " + plural(shownFindings, "finding"));
 
     renderTiles();
+    renderChips();
+  }
+
+  /* Harness facet ----------------------------------------------------- */
+
+  /* One harness is not a choice, so the row only appears when a machine
+     actually runs more than one. The badge on every card still names it. */
+  var facets = document.getElementById("harness-facets");
+  var chipEls = [];
+  if (harnesses.length > 1) {
+    facets.hidden = false;
+    harnesses.forEach(function (h) {
+      var chip = el("button", "chip");
+      chip.type = "button";
+      chip.setAttribute("aria-pressed", "false");
+      chip.appendChild(document.createTextNode(h.label + " "));
+      chip.appendChild(el("span", "n", h.count));
+      chip.addEventListener("click", function () {
+        harnessOn[h.label] = !harnessOn[h.label];
+        render();
+      });
+      facets.appendChild(chip);
+      chipEls.push({button: chip, label: h.label, count: h.count});
+    });
+  }
+
+  function renderChips() {
+    chipEls.forEach(function (entry) {
+      var on = !!harnessOn[entry.label];
+      entry.button.setAttribute("aria-pressed", on ? "true" : "false");
+      entry.button.title = on
+        ? ("Showing skills installed for " + entry.label + ". Click to stop filtering by it.")
+        : ("Show only the " + entry.count + " skill(s) installed for " + entry.label);
+    });
   }
 
   document.getElementById("q").addEventListener("input", function (e) {
@@ -1118,6 +1274,7 @@ SCRIPT = r"""
 
   document.getElementById("reset").addEventListener("click", function () {
     active = {};
+    harnessOn = {};
     query = "";
     expanded = false;
     manualOpen = {};
@@ -1213,7 +1370,10 @@ SCRIPT = r"""
     head.appendChild(el("span", "step-count", plural(group.count, "finding")));
     body.appendChild(head);
 
-    if (group.path) { body.appendChild(el("div", "step-loc", group.path)); }
+    var loc = [];
+    if (group.harness_label) { loc.push(group.harness_label); }
+    if (group.path) { loc.push(group.path); }
+    if (loc.length) { body.appendChild(el("div", "step-loc", loc.join("  ·  "))); }
     body.appendChild(el("div", "what", group.decision));
 
     var ul = el("ul", "fixes");
@@ -1262,7 +1422,9 @@ SCRIPT = r"""
     return (b.always_on_tokens || 0) - (a.always_on_tokens || 0);
   }).forEach(function (skill) {
     var row = el("div", "cost-row");
-    row.appendChild(el("div", "label", skill.name));
+    var label = el("div", "label", skill.name);
+    label.appendChild(el("span", "harness", skill.harness_label));
+    row.appendChild(label);
     var bar = el("div", "bar");
     var fill = el("span");
     fill.style.width = Math.max(2, Math.round((skill.always_on_tokens / peak) * 100)) + "%";
@@ -1294,7 +1456,8 @@ SCRIPT = r"""
     "Sandboxing and isolation belong to the harness, not to a skill file, so they cannot be judged by reading skill content.",
     "Governance questions such as approval workflow and audit logging are organizational; this inventory is where they start.",
     "A skill may behave differently on another harness, since each grants tools its own way."
-  ].forEach(function (line) { limitsEl.appendChild(el("li", null, line)); });
+  ].concat(data.harness_note ? [data.harness_note] : [])
+   .forEach(function (line) { limitsEl.appendChild(el("li", null, line)); });
 
   if (data.notes && data.notes.length) {
     var wrap = document.getElementById("run-notes");

@@ -17,11 +17,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from skill_audit_lib import (  # noqa: E402
+    HARNESS_NOTE,
     RULES,
     SEVERITIES,
     build_action_plan,
     build_agent_prompt,
     estimate_tokens,
+    harness_breakdown,
+    harness_display,
+    harness_label,
+    is_named_harness,
     local_now,
     read_json,
     severity_rank,
@@ -312,6 +317,7 @@ def context_tax(inventory):
             "skill_id": skill["id"],
             "skill": skill["name"],
             "harness": skill["harness"],
+            "scope": skill.get("scope"),
             "always_on_tokens": always_on,
             "body_tokens": skill["body"]["token_estimate"],
             "resource_tokens": skill["resource_token_estimate"],
@@ -347,6 +353,16 @@ def render_report_md(findings, summary, tax, inventory, notes):
                  % (len(skills),
                     sum(1 for p in inventory.get("search_paths", []) if p.get("exists"))))
     lines.append("")
+    # Which harnesses these skills are installed for, before any finding: an
+    # audit of a machine running two harnesses covers two separate sets of
+    # skills, and that is the first thing a reader needs to know about scope.
+    installed_for = [row for row in harness_breakdown(skills)
+                     if is_named_harness(row["harness"])]
+    if installed_for:
+        lines.append("Installed for: %s."
+                     % ", ".join("**%s** %d" % (row["label"], row["count"])
+                                 for row in installed_for))
+        lines.append("")
     lines.append("Findings: **%d critical**, %d high, %d medium, %d low, %d info."
                  % (totals["critical"], totals["high"], totals["medium"],
                     totals["low"], totals["info"]))
@@ -385,7 +401,8 @@ def render_report_md(findings, summary, tax, inventory, notes):
 
     for sid, info in entries:
         counts = info["counts"]
-        harness = by_id.get(sid, {}).get("harness", "unknown")
+        skill = by_id.get(sid, {})
+        harness = harness_label(skill.get("harness"), skill.get("scope"))
         lines.append("| %s | %s | %s | %d | %d | %d | %d | %s |" % (
             display_name(sid, info), harness, info["grade"], counts["critical"],
             counts["high"], counts["medium"], counts["low"],
@@ -395,8 +412,10 @@ def render_report_md(findings, summary, tax, inventory, notes):
     # One action section: the decision a skill needs and the edits that carry
     # it out are the same work at two zoom levels, so they sit in one entry
     # rather than in two lists a reader has to cross-reference.
-    plan = build_action_plan(findings, summary,
-                             {s["id"]: s.get("path") for s in skills})
+    plan = build_action_plan(findings, summary, {
+        s["id"]: {"path": s.get("path"), "harness": s.get("harness"),
+                  "scope": s.get("scope")}
+        for s in skills})
     lines.append("## Next steps")
     lines.append("")
     if not plan:
@@ -410,6 +429,8 @@ def render_report_md(findings, summary, tax, inventory, notes):
             lines.append("%d. **%s** - grade %s, %d finding(s). %s"
                          % (i, group["skill"], group["grade"], group["count"],
                             group["decision"]))
+            if group.get("harness_label"):
+                lines.append("   - Installed for: %s" % group["harness_label"])
             if group.get("path"):
                 lines.append("   - Location: `%s`" % group["path"])
             for item in group["items"]:
@@ -436,6 +457,12 @@ def render_report_md(findings, summary, tax, inventory, notes):
         skill_findings = findings_of(sid)
         skill = by_id.get(sid, {})
         lines.append("### %s (grade %s)" % (display_name(sid, info), info["grade"]))
+        lines.append("")
+        if is_named_harness(skill.get("harness")):
+            lines.append("Installed for: **%s**"
+                         % harness_display(skill.get("harness"), skill.get("scope")))
+        else:
+            lines.append("Not installed for any harness; audited from a path.")
         lines.append("")
         if skill.get("path"):
             lines.append("Location: `%s`" % skill["path"])
@@ -477,12 +504,12 @@ def render_report_md(findings, summary, tax, inventory, notes):
     lines.append("Across %d skill(s) that permanent cost is about **%d tokens** per session."
                  % (tax["skill_count"], tax["always_on_total"]))
     lines.append("")
-    lines.append("| Skill | Always on | Body when activated | Bundled resources |")
-    lines.append("| --- | --- | --- | --- |")
+    lines.append("| Skill | Harness | Always on | Body when activated | Bundled resources |")
+    lines.append("| --- | --- | --- | --- | --- |")
     for row in tax["rows"]:
-        lines.append("| %s | %d | %d | %d |" % (
-            row["skill"], row["always_on_tokens"], row["body_tokens"],
-            row["resource_tokens"]))
+        lines.append("| %s | %s | %d | %d | %d |" % (
+            row["skill"], harness_label(row.get("harness"), row.get("scope")),
+            row["always_on_tokens"], row["body_tokens"], row["resource_tokens"]))
     lines.append("")
 
     # Grades.
@@ -518,6 +545,7 @@ def render_report_md(findings, summary, tax, inventory, notes):
                  "organizational. The inventory in this report is the starting point for them.")
     lines.append("- A skill may behave differently on another harness, since each harness "
                  "grants tools and permissions its own way.")
+    lines.append("- %s" % HARNESS_NOTE)
     lines.append("- The scanner does not run its pattern rules over its own executing "
                  "source, because its rule tables spell out the strings it searches for. "
                  "Any file skipped for that reason is named in the notes below, and any "
@@ -542,8 +570,9 @@ def render_report_md(findings, summary, tax, inventory, notes):
     return "\n".join(lines) + "\n"
 
 
-def print_terminal_summary(findings, summary, tax, out_dir):
+def print_terminal_summary(findings, summary, tax, out_dir, inventory=None):
     totals = summary["totals"]
+    by_id = {s["id"]: s for s in (inventory or {}).get("skills", [])}
     grade_order = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4}
     entries = sorted(summary["by_skill"].items(),
                      key=lambda kv: (grade_order.get(kv[1]["grade"], 5),
@@ -554,12 +583,25 @@ def print_terminal_summary(findings, summary, tax, out_dir):
           % (totals["critical"], totals["high"], totals["medium"],
              totals["low"], totals["info"]))
     print("")
-    print("%-32s %-6s %s" % ("SKILL", "GRADE", "TOP ISSUE"))
+    # The harness column is dropped without an inventory: there is nothing to
+    # name it from, and a column reading "Unknown" on every row says less than
+    # no column at all.
+    def row(name, harness, grade, issue):
+        cells = ["%-32s" % name]
+        if by_id:
+            cells.append("%-14s" % harness)
+        cells.extend(["%-6s" % grade, issue])
+        return " ".join(cells)
+
+    print(row("SKILL", "HARNESS", "GRADE", "TOP ISSUE"))
     for sid, info in entries:
         name = info.get("name") or sid
+        skill = by_id.get(sid, {})
         skill_findings = [f for f in findings
                           if (f.get("skill_id") or f.get("skill")) == sid]
-        print("%-32s %-6s %s" % (name[:32], info["grade"], top_action(skill_findings)))
+        print(row(name[:32],
+                  harness_label(skill.get("harness"), skill.get("scope"))[:14],
+                  info["grade"], top_action(skill_findings)))
     print("")
     print("Always-on context cost of installed skills: about %d tokens."
           % tax["always_on_total"])
@@ -631,7 +673,7 @@ def main(argv=None):
         fh.write(report_md)
 
     if not args.quiet:
-        print_terminal_summary(findings, summary, tax, args.out)
+        print_terminal_summary(findings, summary, tax, args.out, inventory)
 
     return 0
 

@@ -61,6 +61,21 @@ two discovered skills would produce the same id, the later one in the
 deterministic sort order gets a numeric suffix (`harness::name::2`) so distinct
 skills never collapse into one entry.
 
+### Naming the harness a skill is installed for
+
+`harness` is a slug, and every reader-facing surface prints the name that harness goes by instead, from `HARNESS_LABELS` in `scripts/skill_audit_lib.py`.
+`claude` is Claude Code, `codex` is Codex, `opencode` is OpenCode, `cursor` is Cursor, `gemini` is Gemini CLI, `openclaw` is OpenClaw, and `shared` is the shared convention several harnesses read in common.
+A slug outside that table prints as it stands, since discovery can be pointed at any root and a slug says more than a placeholder.
+Where there is no harness to name, the scope answers instead: a directory passed with `--skill` is `Not installed`, one from `--paths` is `Custom path`, and anything else is `Unknown`.
+
+`report.md` names it in the header breakdown, in the summary table, on every skill in "Next steps" and "Findings by skill", in the context cost table, and in the agent prompt.
+`dashboard.html` names it in the masthead, on a badge on every skill card, on every step, and on every context cost row, and turns it into a filter when more than one harness is installed.
+The scope qualifies the name wherever one skill needs separating from another install of itself, as in `Claude Code (plugin)` against `Claude Code (user)`.
+
+The harness named is the one whose directory the skill was found in.
+Several harnesses also read each other's skill directories, as [harnesses.md](harnesses.md) records, so a skill installed for one can load in another.
+Both surfaces say so among their stated limits.
+
 ## findings.json
 
 The same shape is used by the deterministic scan, the semantic review, and the merged report.
@@ -182,7 +197,7 @@ A scanner reporting broad permissions from structure and a review finding that b
 
 ## dashboard.html
 
-`scripts/build_dashboard.py` renders the merged `findings.json` as a single self-contained HTML page: severity totals, a grade per skill with its findings and evidence, filters, and the context cost table.
+`scripts/build_dashboard.py` renders the merged `findings.json` as a single self-contained HTML page: severity totals, a grade per skill with its findings and evidence, the harness each skill is installed for, filters, and the context cost table.
 
 - `--format standalone` writes a complete HTML document to open in a browser.
 - `--format artifact` writes the same page without the document wrapper, for a host that supplies its own `<head>` and `<body>`.

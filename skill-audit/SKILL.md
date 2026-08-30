@@ -92,6 +92,7 @@ python3 "$SKILL_DIR/scripts/build_report.py" --scan skill-audit-work/scan_findin
 ```
 
 This merges both passes, drops malformed semantic entries and notes that it did so, grades each skill, computes the context cost table, and writes `findings.json` and `report.md`.
+Every skill is named with the harness it is installed for, so an audit spanning two harnesses never leaves the reader guessing which set a finding belongs to.
 
 `report.md` carries a **Next steps** section alongside the evidence: the skills that need a decision, worst first, each with the changes that carry that decision out.
 It ends with a ready-made block to hand an agent.
@@ -128,7 +129,7 @@ Do not hand-write this page. The generator escapes untrusted content; retyping i
 
 Tell the user, in this order:
 
-1. The headline: how many skills were audited and how many have critical or high findings.
+1. The headline: how many skills were audited, which harnesses they are installed for, and how many have critical or high findings.
 2. The graded summary table.
 3. The specific actions worth taking, most severe first, naming the skill and what to do.
 4. The always-on context cost figure, since it applies whether or not any skill is used.

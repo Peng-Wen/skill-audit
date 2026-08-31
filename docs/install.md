@@ -3,10 +3,24 @@
 ## The one-liner
 
 ```bash
-npx skills add Peng-Wen/skill-audit
+npx skills add Peng-Wen/skill-audit -g
 ```
 
 That is the whole install for any harness that reads a standard skills directory.
+
+`-g` is the part worth not dropping.
+The skills CLI installs per project by default, and prompts for the scope only when it is interactive and neither `-g` nor `-y` was given, so an unattended install without the flag lands in whatever directory you happened to be standing in.
+This skill audits everything the machine can load, so the user level is the scope that matches what it does.
+
+The CLI detects the harnesses on your machine and asks which of them to install for, or takes all of them under `-y`, symlinking each to a single canonical copy.
+Name them up front with `-a` instead, which takes the CLI's own harness ids and can be repeated:
+
+```bash
+npx skills add Peng-Wen/skill-audit -g -a claude-code -a codex
+```
+
+Add `-y` to skip every prompt, and `--copy` if symlinks are not an option on your filesystem.
+The README lists the [install variations](../README.md#install) that come up most often.
 
 ## By hand
 

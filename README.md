@@ -52,7 +52,43 @@ It inventories every skill your harness can load, checks each one against 35 rul
 ## Install
 
 ```bash
-npx skills add Peng-Wen/skill-audit
+npx skills add Peng-Wen/skill-audit -g
+```
+
+`-g` installs at the user level, which is the scope this skill wants.
+It audits everything your machine can load, so pinning it to one project defeats the point.
+Leave the flag off and the CLI asks which scope to use, except under `-y`, where it quietly picks the project.
+
+Common variations:
+
+```bash
+# Target one harness instead of choosing from the ones the CLI detects
+npx skills add Peng-Wen/skill-audit -g -a claude-code
+
+# Install for several harnesses at once, sharing a single canonical copy
+npx skills add Peng-Wen/skill-audit -g -a claude-code -a codex -a opencode
+
+# Install into the current project instead, to commit alongside the repo
+npx skills add Peng-Wen/skill-audit -a claude-code
+
+# Unattended, for a dotfiles or CI setup script
+npx skills add Peng-Wen/skill-audit -g -a claude-code -y
+
+# Copy the files instead of symlinking them into each harness directory
+npx skills add Peng-Wen/skill-audit -g --copy
+
+# Install from a clone you have already read, rather than straight from GitHub
+npx skills add ./skill-audit -g
+```
+
+The `-a` values are the skills CLI's own harness ids, such as `claude-code`, `codex`, `opencode`, `cursor`, and `gemini-cli`.
+Where each one keeps its skills, and where this audit goes looking for them, is in [harness notes](skill-audit/references/harnesses.md).
+
+Updating and removing take the skill name and the same scope flag you installed with:
+
+```bash
+npx skills update skill-audit -g
+npx skills remove skill-audit -g -a '*'
 ```
 
 Needs `python3`, standard library only.

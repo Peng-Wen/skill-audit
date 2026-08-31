@@ -65,6 +65,7 @@ PROJECT_SKILL_DIRS = [
     (os.path.join(".opencode", "skills"), "opencode"),
     (os.path.join(".agents", "skills"), "shared"),
     (os.path.join(".cursor", "skills"), "cursor"),
+    (os.path.join(".gemini", "skills"), "gemini"),
 ]
 
 MAX_ANCESTOR_LEVELS = 10
@@ -99,23 +100,108 @@ def _project_ancestors(cwd, home, limit=MAX_ANCESTOR_LEVELS):
     return out
 
 
+def _openclaw_state_dirs(home):
+    """OpenClaw state directories, the one it would actually use first.
+
+    OpenClaw takes OPENCLAW_STATE_DIR when it is set. Otherwise it prefers
+    `~/.openclaw` and falls back to `~/.clawdbot`, the directory's former
+    name, only when `~/.openclaw` is absent. Every root OpenClaw reads hangs
+    off whichever of those wins, so a fallback has to carry its plugin and
+    workspace directories too rather than only its skills directory. The ones
+    that did not win are searched as well, on the same reasoning as the other
+    harness-home overrides: skills installed before a move or a rename sit
+    there, and an audit should surface them rather than assume the move was
+    clean.
+
+    An override naming a directory that is already a default collapses into
+    one entry, so pointing OPENCLAW_STATE_DIR at `~/.openclaw`, or at a link
+    to it, reports and walks that root once rather than twice. Entries are
+    compared by resolved path but kept as they were written, since a reader
+    recognizes the directory they configured more readily than its target.
+    """
+    current = os.path.join(home, ".openclaw")
+    legacy = os.path.join(home, ".clawdbot")
+    override = (os.environ.get("OPENCLAW_STATE_DIR") or "").strip()
+    if override:
+        ordered = [os.path.abspath(os.path.expanduser(override)), current, legacy]
+    elif not os.path.isdir(current) and os.path.isdir(legacy):
+        ordered = [legacy, current]
+    else:
+        ordered = [current, legacy]
+
+    out = []
+    seen = set()
+    for state_dir in ordered:
+        try:
+            key = os.path.realpath(state_dir)
+        except OSError:
+            key = os.path.abspath(state_dir)
+        if key not in seen:
+            seen.add(key)
+            out.append(state_dir)
+    return out
+
+
+def _openclaw_workspaces(state_dirs):
+    """Agent workspace directories OpenClaw loads skills from.
+
+    OpenClaw gives each agent a workspace and reads `<workspace>/skills` and
+    `<workspace>/.agents/skills` from it, at higher precedence than anything
+    user-level. The default workspace is `<state dir>/workspace`, renamed to
+    `workspace-<profile>` when OPENCLAW_PROFILE names a non-default profile
+    and replaced outright by OPENCLAW_WORKSPACE_DIR. Additional agents get
+    their workspaces from openclaw.json, which this script does not parse, so
+    every state directory is scanned for siblings matching the `workspace*`
+    naming convention instead. The resolved default comes first and is
+    returned whether or not it exists; the rest are returned only when they do.
+    """
+    override = (os.environ.get("OPENCLAW_WORKSPACE_DIR") or "").strip()
+    if override:
+        default = os.path.abspath(os.path.expanduser(override))
+    else:
+        profile = (os.environ.get("OPENCLAW_PROFILE") or "").strip()
+        name = "workspace"
+        if profile and profile.lower() != "default":
+            name = "workspace-%s" % profile
+        default = os.path.join(state_dirs[0], name)
+
+    out = [default]
+    for state_dir in state_dirs:
+        try:
+            siblings = sorted(os.listdir(state_dir))
+        except OSError:
+            continue
+        for entry in siblings:
+            if not entry.startswith("workspace"):
+                continue
+            candidate = os.path.join(state_dir, entry)
+            if candidate not in out and os.path.isdir(candidate):
+                out.append(candidate)
+    return out
+
+
 def default_search_paths():
     """Built-in skill roots for mainstream harnesses.
 
     Each entry is {"path", "scope", "harness"}. Paths that do not exist are
     still reported (with exists=false) so users can see what was checked.
 
-    Two environment variables relocate harness homes and are honored the way
-    the harnesses themselves honor them: CLAUDE_CONFIG_DIR for Claude Code
-    and CODEX_HOME for Codex. When one is set, the default location is still
-    searched as well, because skills installed before the move can sit there
-    and an audit should surface them rather than assume the move was clean.
+    Three environment variables relocate harness homes and are honored the way
+    the harnesses themselves honor them: CLAUDE_CONFIG_DIR for Claude Code,
+    CODEX_HOME for Codex, and OPENCLAW_STATE_DIR for OpenClaw. When one is
+    set, the default location is still searched as well, because skills
+    installed before the move can sit there and an audit should surface them
+    rather than assume the move was clean.
     """
     home = os.path.expanduser("~")
     cwd = os.getcwd()
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
     claude_home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
     codex_home = os.environ.get("CODEX_HOME") or os.path.join(home, ".codex")
+    # Every OpenClaw root hangs off a state directory, and more than one can
+    # hold skills, so they are resolved together rather than one root at a
+    # time. The first is the one OpenClaw would use.
+    openclaw_state_dirs = _openclaw_state_dirs(home)
 
     user_roots = [
         (os.path.join(claude_home, "skills"), "claude"),
@@ -124,10 +210,11 @@ def default_search_paths():
         (os.path.join(home, ".agents", "skills"), "shared"),
         # The skills CLI's universal install target for its "global" scope.
         (os.path.join(xdg, "agents", "skills"), "shared"),
-        (os.path.join(home, ".claw", "skills"), "openclaw"),
         (os.path.join(home, ".gemini", "skills"), "gemini"),
         (os.path.join(home, ".cursor", "skills"), "cursor"),
     ]
+    user_roots.extend((os.path.join(state_dir, "skills"), "openclaw")
+                      for state_dir in openclaw_state_dirs)
     if os.environ.get("CLAUDE_CONFIG_DIR"):
         user_roots.append((os.path.join(home, ".claude", "skills"), "claude"))
     if os.environ.get("CODEX_HOME"):
@@ -141,6 +228,28 @@ def default_search_paths():
     if os.name == "posix":
         paths.append({"path": os.path.join(os.sep, "etc", "codex", "skills"),
                       "scope": "system", "harness": "codex"})
+
+    # OpenClaw materializes the skills its plugins ship into a directory it
+    # owns outright, separate from the managed skills a user installs, and
+    # loads both. It is the plugin cache's counterpart, so it is reported
+    # under the same scope. The state directory OpenClaw would use is always
+    # listed; a directory it has moved on from is listed only when it exists,
+    # so the search-path list is not padded with roots nobody has.
+    for i, state_dir in enumerate(openclaw_state_dirs):
+        candidate = os.path.join(state_dir, "plugin-skills")
+        if i == 0 or os.path.isdir(candidate):
+            paths.append({"path": candidate, "scope": "plugin", "harness": "openclaw"})
+
+    # An OpenClaw agent's own workspace outranks every user-level root it
+    # reads, so a skill there is the one that actually loads. The resolved
+    # default workspace is always listed; the others are listed only when they
+    # exist, on the same reasoning as the ancestor walk below.
+    for i, workspace in enumerate(_openclaw_workspaces(openclaw_state_dirs)):
+        for rel in ("skills", os.path.join(".agents", "skills")):
+            candidate = os.path.join(workspace, rel)
+            if i == 0 or os.path.isdir(candidate):
+                paths.append({"path": candidate,
+                              "scope": "project", "harness": "openclaw"})
 
     for rel, harness in PROJECT_SKILL_DIRS:
         paths.append({"path": os.path.join(cwd, rel),

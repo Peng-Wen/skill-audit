@@ -267,10 +267,20 @@ def check_default_search_coverage(failures):
         "probe-agents-xdg": "shared",         # $XDG_CONFIG_HOME/agents/skills
         "probe-gemini": "gemini",
         "probe-cursor": "cursor",
-        "probe-claw": "openclaw",
+        "probe-claw-managed": "openclaw",     # ~/.openclaw/skills
+        "probe-claw-legacy": "openclaw",      # ~/.clawdbot/skills
+        "probe-claw-plugin": "openclaw",      # ~/.openclaw/plugin-skills
+        "probe-claw-workspace": "openclaw",   # default agent workspace
+        "probe-claw-agent": "openclaw",       # a sibling agent's workspace
+        # Every OpenClaw root hangs off a state directory, so the former one
+        # has to carry its plugin and workspace directories too, not just its
+        # skills directory.
+        "probe-claw-legacy-plugin": "openclaw",
+        "probe-claw-legacy-workspace": "openclaw",
         "probe-repo-root": "shared",          # .agents/skills at the repo root
         "probe-mid-ancestor": "codex",        # .codex/skills in a mid ancestor
         "probe-cwd": "opencode",              # .opencode/skills in cwd
+        "probe-cwd-gemini": "gemini",         # .gemini/skills in cwd
     }
 
     _write_min_skill(os.path.join(claude_home, "skills", "probe-claude-user"),
@@ -294,8 +304,21 @@ def check_default_search_coverage(failures):
                      "probe-gemini")
     _write_min_skill(os.path.join(fake_home, ".cursor", "skills", "probe-cursor"),
                      "probe-cursor")
-    _write_min_skill(os.path.join(fake_home, ".claw", "skills", "probe-claw"),
-                     "probe-claw")
+    _write_min_skill(os.path.join(fake_home, ".openclaw", "skills", "probe-claw-managed"),
+                     "probe-claw-managed")
+    _write_min_skill(os.path.join(fake_home, ".clawdbot", "skills", "probe-claw-legacy"),
+                     "probe-claw-legacy")
+    _write_min_skill(os.path.join(fake_home, ".openclaw", "plugin-skills",
+                                  "probe-claw-plugin"), "probe-claw-plugin")
+    _write_min_skill(os.path.join(fake_home, ".openclaw", "workspace", "skills",
+                                  "probe-claw-workspace"), "probe-claw-workspace")
+    _write_min_skill(os.path.join(fake_home, ".openclaw", "workspace-ops", ".agents",
+                                  "skills", "probe-claw-agent"), "probe-claw-agent")
+    _write_min_skill(os.path.join(fake_home, ".clawdbot", "plugin-skills",
+                                  "probe-claw-legacy-plugin"), "probe-claw-legacy-plugin")
+    _write_min_skill(os.path.join(fake_home, ".clawdbot", "workspace", "skills",
+                                  "probe-claw-legacy-workspace"),
+                     "probe-claw-legacy-workspace")
 
     # Project tree: repo-root/.agents, a mid-level ancestor, and the cwd, with
     # discovery launched from the deepest directory.
@@ -308,6 +331,8 @@ def check_default_search_coverage(failures):
     leaf = os.path.join(repo, "mid", "leaf")
     _write_min_skill(os.path.join(leaf, ".opencode", "skills", "probe-cwd"),
                      "probe-cwd")
+    _write_min_skill(os.path.join(leaf, ".gemini", "skills", "probe-cwd-gemini"),
+                     "probe-cwd-gemini")
 
     env = dict(os.environ)
     env["HOME"] = fake_home
@@ -316,6 +341,13 @@ def check_default_search_coverage(failures):
     env["CODEX_HOME"] = codex_home
     env["CLAUDE_CONFIG_DIR"] = claude_home
     env.pop("SKILL_AUDIT_PATHS", None)
+    # The probes below sit under the synthetic home, so an OpenClaw variable
+    # inherited from the shell running this check would point discovery at a
+    # real state directory and fail the run for reasons that have nothing to
+    # do with the code under test.
+    for var in ("OPENCLAW_STATE_DIR", "OPENCLAW_WORKSPACE_DIR",
+                "OPENCLAW_PROFILE", "OPENCLAW_HOME"):
+        env.pop(var, None)
 
     out = os.path.join(base, "inventory.json")
     try:

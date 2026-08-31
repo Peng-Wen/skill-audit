@@ -147,11 +147,10 @@ def build_data(findings_doc, inventory, title):
         "generated_at": iso_local_now(),
         "generated_display": local_now(),
         "totals": summary.get("totals", {sev: 0 for sev in SEVERITIES}),
-        "always_on_total": cost.get("always_on_total", 0),
-        # A session loads one harness worth of skills, so the page leads with
-        # the per-harness subtotals and keeps the sum as inventory only.
-        "always_on_per_session": cost.get("always_on_per_session",
-                                          cost.get("always_on_total", 0)),
+        # A session loads one harness worth of skills, so the cost section
+        # renders one sub-section per harness; these groups carry the
+        # subtotals those sub-sections lead with. The pooled figures in the
+        # findings document stay out of the page: no session pays them.
         "cost_by_harness": cost.get("by_harness", []),
         "skill_count": len(skills),
         "harnesses": harness_breakdown(skills),
@@ -599,16 +598,27 @@ h2 {
 /* Context cost --------------------------------------------------------- */
 
 .cost { display: flex; flex-direction: column; gap: 14px; }
+/* One sub-section per harness: its subtotal as the headline, then the notes
+   and rows that belong to that bill alone. */
+.cost-blocks { display: flex; flex-direction: column; gap: 26px; }
+.cost-harness {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 18px;
+}
+.cost-harness:first-child { border-top: none; padding-top: 4px; }
 .cost-headline { display: flex; flex-direction: column; gap: 2px; }
 .cost-headline .big {
   font-family: var(--mono);
-  font-size: clamp(28px, 5vw, 38px);
+  font-size: clamp(24px, 4vw, 32px);
   font-weight: 700;
   line-height: 1.05;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
-.cost-note { margin: 6px 0 0; font-size: 14px; max-width: 74ch; text-wrap: pretty; }
+.cost-note { margin: 0; font-size: 14px; max-width: 74ch; text-wrap: pretty; }
 .cost-rows { display: flex; flex-direction: column; gap: 7px; }
 .cost-row {
   display: grid;
@@ -620,25 +630,6 @@ h2 {
   font-variant-numeric: tabular-nums;
 }
 .cost-row .label { overflow-wrap: anywhere; }
-/* One block of rows per harness, headed by the subtotal that block adds up
-   to, so a bar is read against the session it is actually loaded in. */
-.cost-group {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 8px 0 1px;
-  padding-bottom: 5px;
-  border-bottom: 1px solid var(--line-soft);
-  font-size: 12px;
-}
-.cost-group:first-child { margin-top: 0; }
-.cost-group .who { font-weight: 650; }
-.cost-group .sub {
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-}
 .bar {
   height: 9px;
   background: var(--surface-sunk);
@@ -881,12 +872,8 @@ BODY = """
   <section aria-labelledby="cost-h">
     <h2 id="cost-h">Context cost</h2>
     <div class="cost">
-      <div class="cost-headline">
-        <span class="big" id="cost-big"></span>
-        <span class="eyebrow" id="cost-label"></span>
-      </div>
       <p class="cost-note" id="cost-note"></p>
-      <div class="cost-rows" id="cost-rows"></div>
+      <div class="cost-blocks" id="cost-blocks"></div>
     </div>
   </section>
 
@@ -1438,61 +1425,24 @@ SCRIPT = r"""
   /* Context cost ------------------------------------------------------ */
 
   /* Always-on cost is paid one harness at a time: a session loads the skills
-     installed for the harness it runs under, so the page leads with a single
-     harness and keeps the sum across a machine as inventory. */
-  var costGroups = data.cost_by_harness || [];
-  var installedGroups = costGroups.filter(function (g) { return g.installed; });
-  var uninstalledGroups = costGroups.filter(function (g) { return !g.installed; });
-  var installedTokens = installedGroups.reduce(function (n, g) {
-    return n + (g.always_on_tokens || 0);
-  }, 0);
-  var installedSkills = installedGroups.reduce(function (n, g) {
-    return n + (g.skill_count || 0);
-  }, 0);
-  var heaviest = installedGroups.length ? installedGroups[0] : null;
+     installed for the harness it runs under, so each harness gets its own
+     sub-section with its own subtotal, and no figure on the page sums
+     across harnesses. */
+  var costGroups = (data.cost_by_harness || []).slice();
 
-  /* The heaviest subtotal, or the whole set where none of it is installed. */
-  document.getElementById("cost-big").textContent = data.always_on_per_session + " tokens";
-  document.getElementById("cost-label").textContent = heaviest
-    ? "always on in every " + heaviest.label + " session"
-    : "always on per session, once installed";
-
-  /* The per-harness point first, then what narrows a subtotal further, then
-     the sentence that explains the columns of the rows below it. */
-  var costNote =
+  var intro =
     "The name and description of every installed skill sit in context whether or not any skill is used.";
-  if (installedGroups.length > 1) {
-    costNote += " A session loads only the skills installed for the harness it runs under, so these " +
-      "subtotals are separate bills rather than parts of one: added together the " + installedSkills +
-      " installed skills come to " + installedTokens +
-      " tokens, but no single session carries all of them.";
+  if (costGroups.filter(function (g) { return g.installed; }).length > 1) {
+    intro += " A session loads only the skills installed for the harness it runs under, so each" +
+      " harness below is a separate bill and no session pays more than its own subtotal.";
   }
-  var pluginSkills = installedGroups.reduce(function (n, g) {
-    return n + (g.plugin_count || 0);
-  }, 0);
-  if (pluginSkills) {
-    costNote += " " + pluginSkills + " of them come from plugins, worth " +
-      installedGroups.reduce(function (n, g) { return n + (g.plugin_tokens || 0); }, 0) +
-      " tokens; a plugin's skills load only while that plugin is enabled.";
-  }
-  if (installedGroups.length && uninstalledGroups.length) {
-    var loose = uninstalledGroups.reduce(function (n, g) { return n + (g.skill_count || 0); }, 0);
-    costNote += loose === 1
-      ? " A further skill is not installed for any harness and costs a session nothing until it is."
-      : " A further " + loose + " skills are not installed for any harness and cost a session nothing until they are.";
-  }
-  if (installedGroups.some(function (g) { return g.harness === "shared"; })) {
-    costNote += " Skills under the shared convention are read by more than one harness, " +
-      "so their share of this can be paid in more than one of these sessions.";
-  }
-  costNote += " The body figure below is what a skill adds when it activates; resources are read on demand.";
-  document.getElementById("cost-note").textContent = costNote;
+  intro += " The body figure on a row is what a skill adds when it activates; resources are read on demand.";
+  document.getElementById("cost-note").textContent = intro;
 
   /* One peak across every harness keeps the bars comparable between blocks. */
   var peak = data.skills.reduce(function (m, s) {
     return Math.max(m, s.always_on_tokens || 0);
   }, 1);
-  var costRows = document.getElementById("cost-rows");
 
   function costRow(skill) {
     var row = el("div", "cost-row");
@@ -1514,32 +1464,67 @@ SCRIPT = r"""
     var key = skill.harness_label || "Unknown";
     (byHarness[key] = byHarness[key] || []).push(skill);
   });
-  /* Groups first in the order the report ranked them, then any label the cost
-     breakdown did not carry, so no skill is dropped from the list. */
-  var blocks = costGroups.map(function (g) { return g.label; });
+  /* Groups in the order the report ranked them, then a group built here for
+     any label the cost breakdown did not carry, so no skill is dropped. */
+  var covered = {};
+  costGroups.forEach(function (g) { covered[g.label] = true; });
   Object.keys(byHarness).forEach(function (label) {
-    if (blocks.indexOf(label) === -1) { blocks.push(label); }
+    if (covered[label]) { return; }
+    var members = byHarness[label];
+    costGroups.push({
+      harness: members[0].harness || "unknown",
+      label: label,
+      installed: members.some(function (s) {
+        return s.harness && s.harness !== "unknown";
+      }),
+      skill_count: members.length,
+      always_on_tokens: members.reduce(function (n, s) {
+        return n + (s.always_on_tokens || 0);
+      }, 0),
+      plugin_count: 0,
+      plugin_tokens: 0
+    });
   });
-  /* A single block needs no heading: the figure above it already names the
-     harness it belongs to. */
-  var headBlocks = blocks.length > 1;
-  blocks.forEach(function (label) {
-    var members = (byHarness[label] || []).slice().sort(function (a, b) {
+
+  var costBlocks = document.getElementById("cost-blocks");
+  costGroups.forEach(function (group) {
+    var members = (byHarness[group.label] || []).slice().sort(function (a, b) {
       return (b.always_on_tokens || 0) - (a.always_on_tokens || 0);
     });
     if (!members.length) { return; }
-    if (headBlocks) {
-      var subtotal = members.reduce(function (n, s) {
-        return n + (s.always_on_tokens || 0);
-      }, 0);
-      var head = el("div", "cost-group");
-      head.appendChild(el("span", "who", label));
-      head.appendChild(el("span", "sub",
-        members.length + (members.length === 1 ? " skill · " : " skills · ") +
-        subtotal + " tokens always on"));
-      costRows.appendChild(head);
+
+    var block = el("section", "cost-harness");
+    var headline = el("div", "cost-headline");
+    headline.appendChild(el("span", "big", group.always_on_tokens + " tokens"));
+    /* A named harness reads as the session that pays; the shared convention
+       and an uninstalled group have no session of their own, so their
+       headline leads with the label and the note says who pays, if anyone. */
+    var eyebrow = (group.installed && group.harness !== "shared")
+      ? "always on in every " + group.label + " session"
+      : group.label;
+    headline.appendChild(el("span", "eyebrow",
+      eyebrow + " · " + plural(group.skill_count, "skill")));
+    block.appendChild(headline);
+
+    var notes = [];
+    if (group.harness === "shared") {
+      notes.push("Skills under the shared convention are read by more than one harness, " +
+        "so every harness reading this directory pays these tokens on top of its own bill.");
+    } else if (!group.installed) {
+      notes.push("Not installed for any harness, so no session carries these tokens today; " +
+        "the figure is what their names and descriptions would add once installed.");
     }
-    members.forEach(function (skill) { costRows.appendChild(costRow(skill)); });
+    if (group.plugin_count) {
+      notes.push(group.plugin_count + " of the " + plural(group.skill_count, "skill") +
+        " come from plugins, worth " + group.plugin_tokens + " of these tokens; " +
+        "a plugin's skills load only while that plugin is enabled.");
+    }
+    if (notes.length) { block.appendChild(el("p", "cost-note", notes.join(" "))); }
+
+    var rows = el("div", "cost-rows");
+    members.forEach(function (skill) { rows.appendChild(costRow(skill)); });
+    block.appendChild(rows);
+    costBlocks.appendChild(block);
   });
 
   /* Legend, limits, notes --------------------------------------------- */

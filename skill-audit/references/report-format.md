@@ -201,19 +201,21 @@ A scanner reporting broad permissions from structure and a review finding that b
 `report.md` and the dashboard both close with **Context cost**, built by `context_tax` in `scripts/build_report.py` and carried in `findings.json` under `context_cost`.
 
 It is reported per harness, not as one total.
-A session loads the skills installed for the harness it is running, so a machine with skills under two harnesses never pays both figures at once, and a single pooled number quotes a session nobody runs.
-`context_cost.by_harness` therefore carries a subtotal per harness (`skill_count`, `always_on_tokens`, `body_tokens`, `resource_tokens`, and the `plugin_count` and `plugin_tokens` within it), ordered heaviest first with any group that is not installed for a harness last.
-`always_on_per_session` is the heaviest of those subtotals, which is the most any one session carries.
-`always_on_total` remains the sum across every install and is presented as inventory, explicitly labelled as a figure no session pays.
+A session loads the skills installed for the harness it is running, so a machine with skills under two harnesses never pays both figures at once, and a pooled number quotes a session nobody runs.
+Each harness therefore gets a dedicated sub-section: its subtotal as the headline figure, named as the cost of that harness's sessions, then the qualifications that apply to that harness alone, then the per-skill rows that add up to it.
+A shared intro above the sub-sections carries only the mechanics that hold everywhere - names and descriptions always in context, bodies on activation, resources on demand - and, when more than one harness is installed, the sentence that the sub-sections are separate bills.
+No figure rendered in the section sums across harnesses.
 
-Two qualifications go with the subtotals wherever they apply, because both mean a session may carry less than the figure shown.
+`context_cost.by_harness` carries the subtotal per harness (`skill_count`, `always_on_tokens`, `body_tokens`, `resource_tokens`, and the `plugin_count` and `plugin_tokens` within it), ordered heaviest first with any group that is not installed for a harness last.
+`always_on_per_session` (the heaviest subtotal, the most any one session carries) and `always_on_total` (the sum across every install) stay in the JSON for machine consumers; neither is quoted as prose on a surface.
 
-- Plugin skills load only while their plugin is enabled, and the audit inventories the whole plugin cache, so the plugin share of a subtotal is named alongside it.
-- Skills under the shared convention are read by more than one harness, so their share can be paid in more than one of these sessions.
+Two qualifications go inside the sub-section they apply to, because both mean a session may carry less than the figure shown.
 
-The per-skill table stays underneath, ordered by harness and then by always-on cost, so each block adds up to the subtotal above it.
-On the dashboard each block carries a heading with its harness and subtotal, and the headline figure names the harness it belongs to.
-A run with one harness shows neither headings nor a breakdown table: there is one bill, and the headline already names it.
+- Plugin skills load only while their plugin is enabled, and the audit inventories the whole plugin cache, so the plugin share of a subtotal is named in its sub-section.
+- Skills under the shared convention are read by more than one harness, so that sub-section says its bill is paid on top of the bill of every harness reading the directory.
+
+A group that is not installed for any harness - a skill audited straight from a path - gets the same sub-section shape, with its figure framed as what a session would pay once the skills are installed.
+A run with one harness renders a single sub-section; the shape does not change with the count, so the reader always finds a bill under the harness that pays it.
 
 ## dashboard.html
 

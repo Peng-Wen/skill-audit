@@ -112,15 +112,26 @@ def _openclaw_state_dirs(home):
     harness-home overrides: skills installed before a move or a rename sit
     there, and an audit should surface them rather than assume the move was
     clean.
+
+    An override naming a directory that is already a default collapses into
+    one entry, so pointing OPENCLAW_STATE_DIR at `~/.openclaw` does not report
+    the same root twice.
     """
     current = os.path.join(home, ".openclaw")
     legacy = os.path.join(home, ".clawdbot")
     override = (os.environ.get("OPENCLAW_STATE_DIR") or "").strip()
     if override:
-        return [os.path.abspath(os.path.expanduser(override)), current, legacy]
-    if not os.path.isdir(current) and os.path.isdir(legacy):
-        return [legacy, current]
-    return [current, legacy]
+        ordered = [os.path.abspath(os.path.expanduser(override)), current, legacy]
+    elif not os.path.isdir(current) and os.path.isdir(legacy):
+        ordered = [legacy, current]
+    else:
+        ordered = [current, legacy]
+
+    out = []
+    for state_dir in ordered:
+        if state_dir not in out:
+            out.append(state_dir)
+    return out
 
 
 def _openclaw_workspaces(state_dirs):

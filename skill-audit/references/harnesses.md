@@ -19,7 +19,10 @@ User level, applying to every project:
 
 When `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `OPENCLAW_STATE_DIR` is set, the default location is searched as well as the override: skills installed before a move can still sit there, and an audit should surface them rather than assume the move was clean.
 `~/.clawdbot` is searched for the same reason.
-It is OpenClaw's former state directory, and OpenClaw still falls back to it when `~/.openclaw` is absent.
+It is OpenClaw's former state directory, and OpenClaw still falls back to it when `~/.openclaw` is absent, which makes it the effective state directory on a machine that never migrated.
+
+Every OpenClaw root hangs off a state directory, not just the managed skills one, so the plugin and workspace directories below are resolved per state directory rather than assumed to sit under `~/.openclaw`.
+The state directory OpenClaw would actually use is always listed as checked; one it has moved on from is listed only when it exists, so the search-path list is not padded with roots nobody has.
 
 System level:
 
@@ -46,7 +49,7 @@ Ancestor entries appear in the search-path list only when the directory exists, 
 OpenClaw is the exception to "relative to the working directory".
 Each of its agents has a workspace of its own, usually somewhere under the state directory rather than under the directory a session was launched from, and `<workspace>/skills` outranks every user-level root OpenClaw reads.
 The audit resolves the default workspace the way OpenClaw does, from `OPENCLAW_WORKSPACE_DIR`, then `OPENCLAW_PROFILE` (which names `<state dir>/workspace-<profile>`), then `<state dir>/workspace`, and searches `skills` and `.agents/skills` beneath it.
-Additional agents take their workspaces from `openclaw.json`, which the audit does not parse, so state-directory siblings named `workspace*` are picked up from disk when they exist.
+Additional agents take their workspaces from `openclaw.json`, which the audit does not parse, so siblings named `workspace*` are picked up from disk, in every state directory, when they exist.
 A workspace configured somewhere else entirely is reachable with `--paths`.
 
 Plugin bundles:
@@ -54,7 +57,7 @@ Plugin bundles:
 | Harness | Path |
 | --- | --- |
 | Claude Code | `~/.claude/plugins` (walked in full) |
-| OpenClaw | `~/.openclaw/plugin-skills` (`$OPENCLAW_STATE_DIR/plugin-skills` under an override) |
+| OpenClaw | `<state dir>/plugin-skills`, default `~/.openclaw/plugin-skills` |
 
 OpenClaw materializes the skills its plugins ship into `plugin-skills`, a directory it owns outright and rewrites, separate from the managed skills a user installs into `skills`.
 It loads both, so the audit reports both, and `plugin-skills` carries the plugin scope for the same reason the Claude Code cache does.

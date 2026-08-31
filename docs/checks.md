@@ -7,7 +7,7 @@ The full catalog, with every rule id, its severity, and what triggers it, is in 
 | --- | --- | --- |
 | SEC | 13 | Prompt injection, hidden text, data exfiltration, pipe-to-shell, credential access, hardcoded secrets, obfuscated payloads, destructive commands, persistence, cross-file logic splitting, bundled binaries, remote instruction loading, dynamic execution. |
 | SPEC | 10 | Every constraint the Agent Skills specification places on frontmatter, plus broken and over-nested references. |
-| COST | 5 | Oversized bodies, long descriptions, large bundled files, and the always-on context cost of your whole collection. |
+| COST | 5 | Oversized bodies, long descriptions, large bundled files, and the always-on context cost of your collection, per harness. |
 | TRUST | 4 | Typosquatted names, brand impersonation, missing license, unpinned remote content. |
 | QUAL | 3 | Vague descriptions, descriptions that collide with another skill's, and privileges wider than the stated purpose. |
 

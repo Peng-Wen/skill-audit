@@ -78,7 +78,7 @@
       "assertions": [
         "bloated-skill is flagged with an oversized body finding",
         "The reported body token estimate is within the tolerance in ground_truth.json",
-        "The report states the always-on context cost across all installed skills"
+        "The report states the always-on context cost, attributed to the harness that pays it rather than pooling separate harnesses into one number"
       ]
     }
   ]

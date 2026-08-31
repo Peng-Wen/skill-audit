@@ -91,7 +91,7 @@ An adjudication only ever lowers or resolves a deterministic finding, always wit
 python3 "$SKILL_DIR/scripts/build_report.py" --scan skill-audit-work/scan_findings.json --llm skill-audit-work/llm_findings.json --inventory skill-audit-work/inventory.json --out skill-audit-report/
 ```
 
-This merges both passes, drops malformed semantic entries and notes that it did so, grades each skill, computes the context cost table, and writes `findings.json` and `report.md`.
+This merges both passes, drops malformed semantic entries and notes that it did so, grades each skill, computes the context cost per harness, and writes `findings.json` and `report.md`.
 Every skill is named with the harness it is installed for, so an audit spanning two harnesses never leaves the reader guessing which set a finding belongs to.
 
 `report.md` carries a **Next steps** section after the per-skill evidence it draws on: the skills that need a decision, worst first, each with the changes that carry that decision out.
@@ -132,7 +132,8 @@ Tell the user, in this order:
 1. The headline: how many skills were audited, which harnesses they are installed for, and how many have critical or high findings.
 2. The graded summary table.
 3. The specific actions worth taking, most severe first, naming the skill and what to do.
-4. The always-on context cost figure, since it applies whether or not any skill is used.
+4. The always-on context cost, per harness, since it applies whether or not any skill is used.
+   Quote the subtotal for a harness rather than the sum across all of them: a session loads only the skills installed for the harness it is running.
 5. Where the output is: the link or path to the interactive summary, and the path to `report.md`.
 
 Report what the audit found, without softening a critical finding and without inflating a low one.

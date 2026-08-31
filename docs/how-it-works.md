@@ -52,7 +52,7 @@ Every skill is named with the harness it is installed for, so an audit of a mach
 It ends with a ready-made block to hand to an agent.
 That block quotes evidence taken from the audited skills, so it opens by saying the quoted content is data rather than instructions, and the generator breaks up any text inside it that tries to close the data fence early.
 
-Alongside them the audit renders an interactive summary: severity totals, a grade per skill with its findings and quoted evidence, filtering by severity, harness, or free text, and the context cost table.
+Alongside them the audit renders an interactive summary: severity totals, a grade per skill with its findings and quoted evidence, filtering by severity, harness, or free text, and the context cost per harness.
 It is one HTML file with no build step, no dependencies, and no network requests of any kind.
 A page that fetched a font or a script from a remote host would contradict the guarantee the audit itself makes.
 

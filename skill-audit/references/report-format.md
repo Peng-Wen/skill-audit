@@ -69,7 +69,7 @@ A slug outside that table prints as it stands, since discovery can be pointed at
 Where there is no harness to name, the scope answers instead: a directory passed with `--skill` is `Not installed`, one from `--paths` is `Custom path`, and anything else is `Unknown`.
 
 `report.md` names it in the header breakdown, in the summary table, on every skill in "Next steps" and "Findings by skill", in the context cost table, and in the agent prompt.
-`dashboard.html` names it in the masthead, on a badge on every skill card, on every step, and on every context cost row, and turns it into a filter when more than one harness is installed.
+`dashboard.html` names it in the masthead, on a badge on every skill card, on every step, and on the heading of every context cost block, and turns it into a filter when more than one harness is installed.
 The scope qualifies the name wherever one skill needs separating from another install of itself, as in `Claude Code (plugin)` against `Claude Code (user)`.
 
 The harness named is the one whose directory the skill was found in.
@@ -185,7 +185,7 @@ The skipped files are listed by name in the note, the exclusion is decided by re
 ## The action section and the agent prompt
 
 `report.md` and the dashboard both carry a **Next steps** section built from the merged findings: one entry per skill that has a finding, ordered by severity, giving the decision that skill needs and, under it, every finding as a change to make with its rule, location, and recommendation.
-On both surfaces it sits after the per-skill findings and before the context cost table, so the actions follow the evidence they draw on.
+On both surfaces it sits after the per-skill findings and before the context cost section, so the actions follow the evidence they draw on.
 
 The decision and the edits that carry it out are the same work at two zoom levels, so they sit in one entry.
 Splitting them across two sections made the reader cross-reference two lists that were ordered the same way and grouped the same way, and the per-finding half duplicated the fixes already printed under "Findings by skill".
@@ -196,9 +196,28 @@ That text embeds evidence quoted from audited skills, which makes it an injectio
 When the semantic review reaches a different conclusion from the rule's generic recommendation, both are kept, the reviewer's judgment appended after the rule's.
 A scanner reporting broad permissions from structure and a review finding that breadth justified is a disagreement worth showing rather than hiding, and dropping the second half would produce a fix list asking for changes nobody wants.
 
+## The context cost section
+
+`report.md` and the dashboard both close with **Context cost**, built by `context_tax` in `scripts/build_report.py` and carried in `findings.json` under `context_cost`.
+
+It is reported per harness, not as one total.
+A session loads the skills installed for the harness it is running, so a machine with skills under two harnesses never pays both figures at once, and a single pooled number quotes a session nobody runs.
+`context_cost.by_harness` therefore carries a subtotal per harness (`skill_count`, `always_on_tokens`, `body_tokens`, `resource_tokens`, and the `plugin_count` and `plugin_tokens` within it), ordered heaviest first with any group that is not installed for a harness last.
+`always_on_per_session` is the heaviest of those subtotals, which is the most any one session carries.
+`always_on_total` remains the sum across every install and is presented as inventory, explicitly labelled as a figure no session pays.
+
+Two qualifications go with the subtotals wherever they apply, because both mean a session may carry less than the figure shown.
+
+- Plugin skills load only while their plugin is enabled, and the audit inventories the whole plugin cache, so the plugin share of a subtotal is named alongside it.
+- Skills under the shared convention are read by more than one harness, so their share can be paid in more than one of these sessions.
+
+The per-skill table stays underneath, ordered by harness and then by always-on cost, so each block adds up to the subtotal above it.
+On the dashboard each block carries a heading with its harness and subtotal, and the headline figure names the harness it belongs to.
+A run with one harness shows neither headings nor a breakdown table: there is one bill, and the headline already names it.
+
 ## dashboard.html
 
-`scripts/build_dashboard.py` renders the merged `findings.json` as a single self-contained HTML page: severity totals, a grade per skill with its findings and evidence, the harness each skill is installed for, filters, and the context cost table.
+`scripts/build_dashboard.py` renders the merged `findings.json` as a single self-contained HTML page: severity totals, a grade per skill with its findings and evidence, the harness each skill is installed for, filters, and the context cost per harness.
 
 - `--format standalone` writes a complete HTML document to open in a browser.
 - `--format artifact` writes the same page without the document wrapper, for a host that supplies its own `<head>` and `<body>`.

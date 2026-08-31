@@ -45,7 +45,7 @@ It inventories every skill your harness can load, checks each one against 35 rul
 - **Two passes, because one is not enough** - deterministic rules catch the dangerous syntax, and a semantic reading pass catches manipulation written as ordinary prose, which is where most critical cases in the wild actually live.
 - **Read-only, and hostile content stays data** - nothing belonging to an audited skill is ever executed, imported, or fetched. Text asking to be marked safe is quoted as evidence of injection, not obeyed.
 - **Obfuscation is decoded, not just noticed** - the scanner decodes a level and re-runs its pattern set, so it reports that a blob decodes to a pipe-to-shell command rather than that a blob exists.
-- **A number on your context bill** - every installed skill costs you tokens in every session, used or not. The report totals it, per skill and overall.
+- **A number on your context bill** - every installed skill costs you tokens in every session, used or not. The report totals it per skill and per harness, since a session loads only the skills installed for the harness it is running.
 - **Precision counts as much as detection** - a tool that flags ordinary skills trains you to ignore it, so clean controls in the eval suite exist purely to measure false positives.
 - **Measured, not asserted** - the repo ships its own eval suite and CI gates on it. The skill also audits itself, grades A, and an invariant fails the build if that stops being true.
 

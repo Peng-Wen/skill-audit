@@ -26,7 +26,8 @@ There is a second problem that has nothing to do with malice.
 Every installed skill keeps its name and description in your context permanently, whether you use it or not.
 Twenty skills with generous descriptions is a standing tax on every session, paid before you type anything.
 Most people have never seen that number.
-The report puts one on it, per skill and in total.
+The report puts one on it, per skill and per harness.
+Per harness rather than pooled, because a session loads only the skills installed for the harness it is running, and a machine with two harnesses never pays both totals at once.
 
 A vague description is worse than a tax.
 It either fails to trigger when you need it, or triggers on work it has no business touching.

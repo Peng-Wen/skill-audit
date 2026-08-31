@@ -217,6 +217,9 @@ Two qualifications go inside the sub-section they apply to, because both mean a 
 A group that is not installed for any harness - a skill audited straight from a path - gets the same sub-section shape, with its figure framed as what a session would pay once the skills are installed.
 A run with one harness renders a single sub-section; the shape does not change with the count, so the reader always finds a bill under the harness that pays it.
 
+A run that found no skills at all has no group to render, and both surfaces state the zero rather than leaving the heading over empty space: the section becomes a single line naming 0 tokens.
+`check_empty_inventory_reports_cost` in `evals/check_invariants.py` holds report.md to that, since a section assembled by looping over groups is one an empty inventory can silently blank.
+
 ## dashboard.html
 
 `scripts/build_dashboard.py` renders the merged `findings.json` as a single self-contained HTML page: severity totals, a grade per skill with its findings and evidence, the harness each skill is installed for, filters, and the context cost per harness.

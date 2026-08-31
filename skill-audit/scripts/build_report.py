@@ -559,51 +559,60 @@ def render_report_md(findings, summary, tax, inventory, notes):
     # session nobody ever runs, so no figure here sums across them.
     lines.append("## Context cost")
     lines.append("")
-    lines.append("Every installed skill keeps its name and description in context at all "
-                 "times, whether or not it is used.")
-    installed_groups = [g for g in tax["by_harness"] if g["installed"]]
-    if len(installed_groups) > 1:
-        lines.append("A session loads only the skills installed for the harness it is "
-                     "running, so each harness below is a separate bill: no session pays "
-                     "more than its own subtotal.")
-    lines.append("")
+    if not tax["by_harness"]:
+        # With nothing to group there is no sub-section to carry a figure, and
+        # a section that explains the cost model without ever naming a cost
+        # reads as truncated. Zero is the answer here, so it is stated.
+        lines.append("No skills were found, so no session carries an always-on skill "
+                     "cost: **0 tokens**.")
+        lines.append("")
+    else:
+        lines.append("Every installed skill keeps its name and description in context at "
+                     "all times, whether or not it is used.")
+        installed_groups = [g for g in tax["by_harness"] if g["installed"]]
+        if len(installed_groups) > 1:
+            lines.append("A session loads only the skills installed for the harness it is "
+                         "running, so each harness below is a separate bill: no session "
+                         "pays more than its own subtotal.")
+        lines.append("")
 
-    rows_by_label = {}
-    for row in tax["rows"]:
-        label = harness_label(row.get("harness"), row.get("scope"))
-        rows_by_label.setdefault(label, []).append(row)
+        rows_by_label = {}
+        for row in tax["rows"]:
+            label = harness_label(row.get("harness"), row.get("scope"))
+            rows_by_label.setdefault(label, []).append(row)
 
-    for group in tax["by_harness"]:
-        lines.append("### %s" % group["label"])
-        lines.append("")
-        if group["harness"] == "shared":
-            lines.append("About **%d tokens** across %d skill(s) under the shared "
-                         "convention. More than one harness reads this directory, so "
-                         "every harness reading it pays these tokens on top of its own "
-                         "bill." % (group["always_on_tokens"], group["skill_count"]))
-        elif group["installed"]:
-            lines.append("About **%d tokens** in every %s session, across %d skill(s), "
-                         "carried before you type anything."
-                         % (group["always_on_tokens"], group["label"],
-                            group["skill_count"]))
-        else:
-            lines.append("These %d skill(s) are not installed for any harness, so no "
-                         "session carries them today; installed, their names and "
-                         "descriptions would add about **%d tokens** per session."
-                         % (group["skill_count"], group["always_on_tokens"]))
-        if group["plugin_count"]:
-            lines.append("%d of the skill(s) come from plugins, worth %d of these "
-                         "tokens; a plugin's skills load only while that plugin is "
-                         "enabled."
-                         % (group["plugin_count"], group["plugin_tokens"]))
-        lines.append("")
-        lines.append("| Skill | Always on | Body when activated | Bundled resources |")
-        lines.append("| --- | --- | --- | --- |")
-        for row in rows_by_label.get(group["label"], []):
-            lines.append("| %s | %d | %d | %d |" % (
-                row["skill"], row["always_on_tokens"], row["body_tokens"],
-                row["resource_tokens"]))
-        lines.append("")
+        for group in tax["by_harness"]:
+            lines.append("### %s" % group["label"])
+            lines.append("")
+            if group["harness"] == "shared":
+                lines.append("About **%d tokens** across %d skill(s) under the shared "
+                             "convention. More than one harness reads this directory, so "
+                             "every harness reading it pays these tokens on top of its "
+                             "own bill."
+                             % (group["always_on_tokens"], group["skill_count"]))
+            elif group["installed"]:
+                lines.append("About **%d tokens** in every %s session, across %d "
+                             "skill(s), carried before you type anything."
+                             % (group["always_on_tokens"], group["label"],
+                                group["skill_count"]))
+            else:
+                lines.append("These %d skill(s) are not installed for any harness, so no "
+                             "session carries them today; installed, their names and "
+                             "descriptions would add about **%d tokens** per session."
+                             % (group["skill_count"], group["always_on_tokens"]))
+            if group["plugin_count"]:
+                lines.append("%d of the skill(s) come from plugins, worth %d of these "
+                             "tokens; a plugin's skills load only while that plugin is "
+                             "enabled."
+                             % (group["plugin_count"], group["plugin_tokens"]))
+            lines.append("")
+            lines.append("| Skill | Always on | Body when activated | Bundled resources |")
+            lines.append("| --- | --- | --- | --- |")
+            for row in rows_by_label.get(group["label"], []):
+                lines.append("| %s | %d | %d | %d |" % (
+                    row["skill"], row["always_on_tokens"], row["body_tokens"],
+                    row["resource_tokens"]))
+            lines.append("")
 
     # Grades.
     lines.append("## How to read this report")
@@ -699,7 +708,9 @@ def print_terminal_summary(findings, summary, tax, out_dir, inventory=None):
     # Per harness, since that is what one session loads. A pooled figure would
     # quote a session that never runs.
     installed_groups = [g for g in tax["by_harness"] if g["installed"]]
-    if len(installed_groups) > 1:
+    if not tax["by_harness"]:
+        print("Always-on context cost: none, no skills were found.")
+    elif len(installed_groups) > 1:
         print("Always-on context cost, per session: %s."
               % " · ".join("%s about %d tokens (%d skills)"
                            % (g["label"], g["always_on_tokens"], g["skill_count"])

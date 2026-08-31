@@ -454,6 +454,35 @@ def check_skill_ids_unique(failures):
         _shutil.rmtree(base, ignore_errors=True)
 
 
+def check_empty_inventory_reports_cost(failures):
+    """The report must still answer "what does this cost" when nothing was found.
+
+    The context cost section is built by iterating the per-harness groups, and
+    an empty inventory produces no groups at all. That is exactly the shape
+    where a loop silently emits nothing, leaving a heading and an explanation
+    of the cost model with no cost anywhere under it. Zero is a real answer and
+    has to be rendered as one.
+
+    Only report.md is asserted on here. The dashboard builds its cost section
+    in the browser, so its zero state cannot be checked by rendering the page;
+    the guard for it lives in the page script and is exercised by hand.
+    """
+    import build_report
+
+    inventory = {"skills": [], "search_paths": []}
+    tax = build_report.context_tax(inventory)
+    summary = {"totals": {sev: 0 for sev in ("critical", "high", "medium",
+                                             "low", "info")},
+               "by_skill": {}}
+    markdown = build_report.render_report_md([], summary, tax, inventory, [])
+    section = markdown.split("## Context cost", 1)[-1].split("\n## ", 1)[0]
+    if "0 tokens" not in section:
+        failures.append(
+            "report.md's context cost section states no figure for an empty "
+            "inventory: %r. An empty by_harness must still render a zero state."
+            % section.strip())
+
+
 def check_rubric_weights(failures):
     """The rubric's stated weights and the scoring code must agree.
 
@@ -489,12 +518,13 @@ def main():
     check_default_search_coverage(failures)
     check_skill_ids_unique(failures)
     check_backstop_not_mutable(failures)
+    check_empty_inventory_reports_cost(failures)
     check_rubric_weights(failures)
 
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
           "self-audit cleanliness, self-exclusion scope, fixture banners, "
           "discovery reach, per-harness search coverage, id uniqueness, "
-          "backstop evasions, rubric weights.")
+          "backstop evasions, empty-inventory cost state, rubric weights.")
     print("Self-audit: %d finding(s) against the running scanner (must be 0); "
           "%d finding(s) when a modified copy is scanned (must be above 0)."
           % (own, copied))

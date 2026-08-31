@@ -114,8 +114,10 @@ def _openclaw_state_dirs(home):
     clean.
 
     An override naming a directory that is already a default collapses into
-    one entry, so pointing OPENCLAW_STATE_DIR at `~/.openclaw` does not report
-    the same root twice.
+    one entry, so pointing OPENCLAW_STATE_DIR at `~/.openclaw`, or at a link
+    to it, reports and walks that root once rather than twice. Entries are
+    compared by resolved path but kept as they were written, since a reader
+    recognizes the directory they configured more readily than its target.
     """
     current = os.path.join(home, ".openclaw")
     legacy = os.path.join(home, ".clawdbot")
@@ -128,8 +130,14 @@ def _openclaw_state_dirs(home):
         ordered = [current, legacy]
 
     out = []
+    seen = set()
     for state_dir in ordered:
-        if state_dir not in out:
+        try:
+            key = os.path.realpath(state_dir)
+        except OSError:
+            key = os.path.abspath(state_dir)
+        if key not in seen:
+            seen.add(key)
             out.append(state_dir)
     return out
 

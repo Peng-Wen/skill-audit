@@ -267,10 +267,15 @@ def check_default_search_coverage(failures):
         "probe-agents-xdg": "shared",         # $XDG_CONFIG_HOME/agents/skills
         "probe-gemini": "gemini",
         "probe-cursor": "cursor",
-        "probe-claw": "openclaw",
+        "probe-claw-managed": "openclaw",     # ~/.openclaw/skills
+        "probe-claw-legacy": "openclaw",      # ~/.clawdbot/skills
+        "probe-claw-plugin": "openclaw",      # ~/.openclaw/plugin-skills
+        "probe-claw-workspace": "openclaw",   # default agent workspace
+        "probe-claw-agent": "openclaw",       # a sibling agent's workspace
         "probe-repo-root": "shared",          # .agents/skills at the repo root
         "probe-mid-ancestor": "codex",        # .codex/skills in a mid ancestor
         "probe-cwd": "opencode",              # .opencode/skills in cwd
+        "probe-cwd-gemini": "gemini",         # .gemini/skills in cwd
     }
 
     _write_min_skill(os.path.join(claude_home, "skills", "probe-claude-user"),
@@ -294,8 +299,16 @@ def check_default_search_coverage(failures):
                      "probe-gemini")
     _write_min_skill(os.path.join(fake_home, ".cursor", "skills", "probe-cursor"),
                      "probe-cursor")
-    _write_min_skill(os.path.join(fake_home, ".claw", "skills", "probe-claw"),
-                     "probe-claw")
+    _write_min_skill(os.path.join(fake_home, ".openclaw", "skills", "probe-claw-managed"),
+                     "probe-claw-managed")
+    _write_min_skill(os.path.join(fake_home, ".clawdbot", "skills", "probe-claw-legacy"),
+                     "probe-claw-legacy")
+    _write_min_skill(os.path.join(fake_home, ".openclaw", "plugin-skills",
+                                  "probe-claw-plugin"), "probe-claw-plugin")
+    _write_min_skill(os.path.join(fake_home, ".openclaw", "workspace", "skills",
+                                  "probe-claw-workspace"), "probe-claw-workspace")
+    _write_min_skill(os.path.join(fake_home, ".openclaw", "workspace-ops", ".agents",
+                                  "skills", "probe-claw-agent"), "probe-claw-agent")
 
     # Project tree: repo-root/.agents, a mid-level ancestor, and the cwd, with
     # discovery launched from the deepest directory.
@@ -308,6 +321,8 @@ def check_default_search_coverage(failures):
     leaf = os.path.join(repo, "mid", "leaf")
     _write_min_skill(os.path.join(leaf, ".opencode", "skills", "probe-cwd"),
                      "probe-cwd")
+    _write_min_skill(os.path.join(leaf, ".gemini", "skills", "probe-cwd-gemini"),
+                     "probe-cwd-gemini")
 
     env = dict(os.environ)
     env["HOME"] = fake_home

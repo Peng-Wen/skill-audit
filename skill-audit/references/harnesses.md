@@ -13,11 +13,13 @@ User level, applying to every project:
 | Codex | `$CODEX_HOME/skills`, default `~/.codex/skills` |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/skills`, usually `~/.config/opencode/skills` |
 | Shared convention | `~/.agents/skills`, plus `$XDG_CONFIG_HOME/agents/skills` (where the skills CLI installs its global scope) |
-| OpenClaw | `~/.claw/skills` |
+| OpenClaw | `$OPENCLAW_STATE_DIR/skills`, default `~/.openclaw/skills`, plus the former `~/.clawdbot/skills` |
 | Gemini CLI | `~/.gemini/skills` |
 | Cursor | `~/.cursor/skills` |
 
-When `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set, the default location is searched as well as the override: skills installed before a move can still sit there, and an audit should surface them rather than assume the move was clean.
+When `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `OPENCLAW_STATE_DIR` is set, the default location is searched as well as the override: skills installed before a move can still sit there, and an audit should surface them rather than assume the move was clean.
+`~/.clawdbot` is searched for the same reason.
+It is OpenClaw's former state directory, and OpenClaw still falls back to it when `~/.openclaw` is absent.
 
 System level:
 
@@ -34,17 +36,28 @@ Project level, relative to the working directory:
 | OpenCode | `.opencode/skills` |
 | Shared convention | `.agents/skills` |
 | Cursor | `.cursor/skills` |
+| Gemini CLI | `.gemini/skills` |
 | Generic | `skills/` (checked in the working directory only) |
 
 The dot-prefixed project directories are also checked in every parent of the working directory up to the repository root.
 Codex documents exactly that scan for `.agents/skills`, and a skill sitting in any parent loads for whoever launches there, so the audit walks the same span.
 Ancestor entries appear in the search-path list only when the directory exists, and the walk stops at the repository root, the home directory, or ten levels, whichever comes first.
 
+OpenClaw is the exception to "relative to the working directory".
+Each of its agents has a workspace of its own, usually somewhere under the state directory rather than under the directory a session was launched from, and `<workspace>/skills` outranks every user-level root OpenClaw reads.
+The audit resolves the default workspace the way OpenClaw does, from `OPENCLAW_WORKSPACE_DIR`, then `OPENCLAW_PROFILE` (which names `<state dir>/workspace-<profile>`), then `<state dir>/workspace`, and searches `skills` and `.agents/skills` beneath it.
+Additional agents take their workspaces from `openclaw.json`, which the audit does not parse, so state-directory siblings named `workspace*` are picked up from disk when they exist.
+A workspace configured somewhere else entirely is reachable with `--paths`.
+
 Plugin bundles:
 
 | Harness | Path |
 | --- | --- |
 | Claude Code | `~/.claude/plugins` (walked in full) |
+| OpenClaw | `~/.openclaw/plugin-skills` (`$OPENCLAW_STATE_DIR/plugin-skills` under an override) |
+
+OpenClaw materializes the skills its plugins ship into `plugin-skills`, a directory it owns outright and rewrites, separate from the managed skills a user installs into `skills`.
+It loads both, so the audit reports both, and `plugin-skills` carries the plugin scope for the same reason the Claude Code cache does.
 
 The Claude Code plugin cache has carried several layouts, and a marketplace
 plugin nests its skills several directories down, at
@@ -65,6 +78,7 @@ Two overrides exist, both useful for auditing something that is not installed ye
 
 Many harnesses read more than their own directory.
 OpenCode documents that it also loads `.claude/skills`, `~/.claude/skills`, `.agents/skills`, and `~/.agents/skills`, and Codex's current documentation centers on the shared `.agents/skills` convention rather than a private directory.
+Gemini CLI treats `.agents/skills` and `~/.agents/skills` as aliases of its own two directories, and OpenClaw reads `~/.agents/skills` as personal agent skills alongside its managed directory.
 The Agent Skills format started under `.claude/skills`, so a large body of skills lives at that path whatever harness reads it.
 The audit deduplicates by resolved real path, so a skill reachable from several harnesses is inventoried once rather than repeatedly.
 Symbolic links between harness directories are common and resolve to the same entry for the same reason.

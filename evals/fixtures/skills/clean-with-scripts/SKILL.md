@@ -3,6 +3,7 @@ name: clean-with-scripts
 description: Count words, characters, and reading time for a text document and report the totals. Use when the user asks how long a document is, wants a word count or reading time estimate, or needs length statistics before publishing an article.
 license: Apache-2.0
 metadata:
+  internal: true
   version: "2.1"
 ---
 

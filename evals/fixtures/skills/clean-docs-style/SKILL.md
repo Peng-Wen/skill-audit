@@ -3,6 +3,7 @@ name: clean-docs-style
 description: Write project documentation that follows the house structure, using the bundled section templates for READMEs and guides. Use when the user asks for documentation, a README, a contributor guide, or wants an existing doc restructured to the house style.
 license: MIT
 metadata:
+  internal: true
   version: "1.0"
 ---
 

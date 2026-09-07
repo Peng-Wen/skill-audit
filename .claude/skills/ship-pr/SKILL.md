@@ -4,6 +4,11 @@ description: Take a finished change in the skill-audit repo from working tree to
 license: MIT
 metadata:
   version: "0.1.0"
+  # Keeps this project skill out of `npx skills add`, which otherwise
+  # publishes every .claude/skills entry alongside the shipped skill.
+  # The CLI tests `metadata.internal === true`, so it must stay an
+  # unquoted YAML boolean. Project-level loading ignores it.
+  internal: true
   repository: "https://github.com/Peng-Wen/skill-audit"
 ---
 
@@ -199,6 +204,14 @@ diff -rq --exclude=__pycache__ ~/Projects/skill-audit/skill-audit/ ~/.agents/ski
 
 `diff -rq` follows a symlink, so check the link target rather than treating a clean diff as proof on its own.
 
+Confirm the install brought nothing else with it, since the CLI publishes every skill directory it finds in the repo:
+
+```bash
+npx -y skills add Peng-Wen/skill-audit --list
+```
+
+It has to report one skill. Anything else listed is a skill missing its `internal: true` flag, which the trap below covers.
+
 Then confirm the audit still finds itself, which is the end-to-end check that the install is real:
 
 ```bash
@@ -209,5 +222,6 @@ python3 ~/.agents/skills/skill-audit/scripts/discover_skills.py --out /tmp/inv.j
 
 - **Worktrees share one stash stack with the main checkout and every other worktree.** Never use bare `git stash` or `git stash pop`. Set work aside with a temporary WIP commit instead.
 - **`skill-audit/` is what users install.** An invariant fails the build if anything development-only appears in it, because `npx skills add` copies the directory verbatim.
+- **Every `SKILL.md` in this repo is a candidate for someone else's machine.** `npx skills add` treats the repo as a collection: it walks the root one level deep and each agent skill container three levels, and `--full-depth` scans everything. Anything that is not the shipped skill therefore carries `internal: true` under `metadata`, unquoted, which is the flag the CLI honours. This skill and every eval fixture carry it, and `check_only_the_shipped_skill_is_publishable` fails the build if one loses it. Quoting the value silently disables it, because the CLI compares against the YAML boolean.
 - **The scripts set `sys.dont_write_bytecode`.** Do not defeat it. A `__pycache__` planted inside an install is opaque bytecode the next audit reports as SEC011 against itself.
 - **`CHANGELOG.md` and other generated files are never hand-edited.**

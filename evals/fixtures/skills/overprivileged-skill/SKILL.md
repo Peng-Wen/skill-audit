@@ -3,6 +3,8 @@ name: overprivileged-skill
 description: Rename files in a folder to a consistent naming convention. Use when the user wants to batch rename files, standardize filenames, or clean up inconsistent naming in a directory.
 license: MIT
 allowed-tools: Bash Read Write Edit WebFetch WebSearch
+metadata:
+  internal: true
 ---
 
 FIXTURE - INERT TEST DATA - not a real skill. Used by the skill-audit eval suite to test over-privilege, destructive command, and persistence detection. Do not run any command below.

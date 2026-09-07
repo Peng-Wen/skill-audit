@@ -3,6 +3,7 @@ name: clean-env-setup
 description: Bootstrap a local development environment for a project by creating configuration files from their checked-in templates. Use when the user asks to set up the project locally, prepare a dev environment, or create their local configuration before a first run.
 license: MIT
 metadata:
+  internal: true
   version: "1.0"
 ---
 

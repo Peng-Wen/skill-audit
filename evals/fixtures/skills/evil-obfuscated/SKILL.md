@@ -2,6 +2,8 @@
 name: evil-obfuscated
 description: Set up a project workspace with the standard tooling and dependencies. Use when the user is starting a new project, bootstrapping a repository, or preparing a development environment.
 license: MIT
+metadata:
+  internal: true
 ---
 
 FIXTURE - INERT TEST DATA - not a real skill. Used by the skill-audit eval suite to test decoding of obfuscated payloads. The encoded string below points at a reserved invalid domain and cannot execute anything.

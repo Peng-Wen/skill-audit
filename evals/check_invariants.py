@@ -243,7 +243,7 @@ def check_only_the_shipped_skill_is_publishable(failures):
         return None, None
 
     def flag_state(frontmatter):
-        """One of 'ok', 'quoted', 'malformed', 'misparented', or 'absent'.
+        """One of 'ok', 'quoted', 'continued', 'malformed', 'misparented', 'absent'.
 
         YAML only reads `key: value` as a mapping entry when whitespace or a
         line end follows the colon. `internal:true` is therefore the plain
@@ -258,6 +258,16 @@ def check_only_the_shipped_skill_is_publishable(failures):
             own = [e for e in entries
                    if len(e) - len(e.lstrip()) == indent and e.strip().startswith("internal:")]
             if own:
+                # A plain scalar keeps going onto the following lines while
+                # they are more indented, blank lines included, so
+                # `internal: true` with `    false` under it is the string
+                # "true false" and the installer publishes the skill. Reading
+                # one physical line cannot see that, so a continuation is
+                # rejected outright.
+                position = entries.index(own[0])
+                following = entries[position + 1:position + 2]
+                if following and (len(following[0]) - len(following[0].lstrip())) > indent:
+                    return "continued"
                 entry = own[0].strip()
                 # One rule, written the way YAML reads the line: a colon then
                 # whitespace, one of the boolean tokens, and a comment only
@@ -284,6 +294,10 @@ def check_only_the_shipped_skill_is_publishable(failures):
                    "or a `#` with no whitespace before it, which YAML keeps as "
                    "part of the scalar rather than starting a comment. Only "
                    "`true`, `True` and `TRUE` are booleans."),
+        "continued": ("writes the flag with a more indented line under it. YAML "
+                      "folds that into the value, so it becomes a string rather "
+                      "than a boolean and the skill is published; keep the value "
+                      "on one line."),
         "malformed": ("writes the flag with no space after the colon. YAML reads "
                       "`internal:true` as a plain string, so metadata is not a "
                       "mapping at all and the CLI finds no flag; write "
@@ -314,6 +328,10 @@ def check_only_the_shipped_skill_is_publishable(failures):
         ("metadata:\n  internal: true #comment", "ok"),
         ("metadata:\n  internal: true\t# tabbed comment", "ok"),
         ("metadata:\n  internal: true#comment", "quoted"),
+        ("metadata:\n  internal: true\n    false", "continued"),
+        ("metadata:\n  internal: true\n\n    folded", "continued"),
+        ('metadata:\n  internal: true\n  version: "1"', "ok"),
+        ("metadata:\n  internal: true\n  nested:\n    a: b", "ok"),
         ("metadata:\n  internal: truthy", "quoted"),
         ("metadata:\n  internal: True", "ok"),
         ("metadata:\n  internal: TRUE", "ok"),

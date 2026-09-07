@@ -172,7 +172,7 @@ def check_for_shadowing_install(skill_dir):
     local = _tree_digest(skill_dir)
     conflicts = []
     for entry in discover_skills.default_search_paths():
-        if entry["scope"] not in ("user", "system", "plugin"):
+        if entry["scope"] not in ("user", "system", "plugin", "builtin"):
             continue
         for found in discover_skills.find_skill_dirs(entry["path"]):
             if os.path.basename(os.path.normpath(found)) != name:

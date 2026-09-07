@@ -42,7 +42,10 @@ from skill_audit_lib import (  # noqa: E402
     build_action_plan,
     build_agent_prompt,
     harness_breakdown,
+    harness_display,
     harness_label,
+    install_labels,
+    install_sites,
     iso_local_now,
     local_now,
     read_json,
@@ -76,7 +79,9 @@ def build_data(findings_doc, inventory, title):
         paths[skill["id"]] = skill.get("path")
         file_counts[skill["id"]] = len(skill.get("files", []))
         installed_for[skill["id"]] = {"harness": skill.get("harness"),
-                                      "scope": skill.get("scope")}
+                                      "scope": skill.get("scope"),
+                                      "path": skill.get("path"),
+                                      "installs": skill.get("installs")}
 
     cost_rows = {row.get("skill_id") or row["skill"]: row
                  for row in cost.get("rows", [])}
@@ -92,7 +97,8 @@ def build_data(findings_doc, inventory, title):
         # The inventory is the better source, but the page is also built from
         # findings.json alone, and the cost rows carry the same two fields.
         where = installed_for.get(sid) or {"harness": row.get("harness"),
-                                           "scope": row.get("scope")}
+                                           "scope": row.get("scope"),
+                                           "installs": row.get("installs")}
         where_by_id[sid] = where
         entries = sorted(grouped.get(sid, []),
                          key=lambda f: (f.get("status") == "resolved",
@@ -108,6 +114,16 @@ def build_data(findings_doc, inventory, title):
             # The label is what the page shows and filters on; the scope
             # separates two installs of one skill under the same harness.
             "harness_label": harness_label(where.get("harness"), where.get("scope")),
+            "harness_labels": install_labels(where),
+            # Every place the skill is installed, for the badges and the
+            # card's location line; a symlinked install lists each name the
+            # directory goes by.
+            "installs": [{
+                "harness": site["harness"],
+                "harness_label": harness_display(site["harness"], site["scope"]),
+                "scope": site["scope"],
+                "path": site["path"],
+            } for site in install_sites(where)],
             "scope": where.get("scope"),
             "path": paths.get(sid),
             "files": file_counts.get(sid),
@@ -136,7 +152,7 @@ def build_data(findings_doc, inventory, title):
 
     plan = build_action_plan(findings, summary, {
         sid: {"path": paths.get(sid), "harness": where.get("harness"),
-              "scope": where.get("scope")}
+              "scope": where.get("scope"), "installs": where.get("installs")}
         for sid, where in where_by_id.items()})
 
     return {
@@ -937,14 +953,35 @@ SCRIPT = r"""
     return Object.keys(harnessOn).some(function (h) { return harnessOn[h]; });
   }
 
-  /* Which harness a skill is installed for is a property of the skill, so it
-     narrows the roster before any per-finding filter is considered. The label
+  /* Every harness a skill is installed for, primary first. A page built from
+     an older findings document carries only the one label. */
+  function harnessLabels(skill) {
+    var labels = skill.harness_labels;
+    if (!labels || !labels.length) { labels = [skill.harness_label || "Unknown"]; }
+    return labels;
+  }
+
+  /* Every distinct directory a skill is reachable at: a symlinked install is
+     one directory under two names, and both belong on the card. */
+  function installPaths(skill) {
+    var paths = [];
+    if (skill.path) { paths.push(skill.path); }
+    (skill.installs || []).forEach(function (site) {
+      if (site.path && paths.indexOf(site.path) === -1) { paths.push(site.path); }
+    });
+    return paths;
+  }
+
+  /* Which harnesses a skill is installed for is a property of the skill, so
+     it narrows the roster before any per-finding filter is considered, and a
+     skill installed for two harnesses answers to either chip. The label
      indexes a plain object, so the lookup is guarded the way every other
      lookup keyed by audited data is. */
   function harnessMatches(skill) {
     if (!harnessFilterOn()) { return true; }
-    return Object.prototype.hasOwnProperty.call(harnessOn, skill.harness_label) &&
-      !!harnessOn[skill.harness_label];
+    return harnessLabels(skill).some(function (label) {
+      return Object.prototype.hasOwnProperty.call(harnessOn, label) && !!harnessOn[label];
+    });
   }
 
   /* Masthead ---------------------------------------------------------- */
@@ -1052,8 +1089,8 @@ SCRIPT = r"""
   }
 
   function skillText(skill) {
-    return [skill.name, skill.harness, skill.harness_label || "",
-            skill.scope || "", skill.path || ""];
+    return [skill.name, skill.harness, skill.scope || ""]
+      .concat(harnessLabels(skill), installPaths(skill));
   }
 
   function textMatchesFinding(skill, f) {
@@ -1162,14 +1199,21 @@ SCRIPT = r"""
     var mid = el("div");
     var headline = el("div", "skill-headline");
     headline.appendChild(el("span", "skill-name", skill.name));
-    var badge = el("span", "harness-badge", skill.harness_label);
-    badge.title = "Installed for " + skill.harness_label +
-      (skill.scope ? ", " + skill.scope + " scope" : "") + ". " + (data.harness_note || "");
-    headline.appendChild(badge);
+    /* One badge per harness the skill is installed for: a skill under the
+       shared convention, or symlinked between two directories, loads in more
+       than one session, and the card says so up front. */
+    var where = (skill.installs && skill.installs.length)
+      ? skill.installs.map(function (site) { return site.harness_label; })
+      : [skill.harness_label + (skill.scope ? " (" + skill.scope + ")" : "")];
+    harnessLabels(skill).forEach(function (label) {
+      var badge = el("span", "harness-badge", label);
+      badge.title = "Installed for " + where.join(", ") + ". " + (data.harness_note || "");
+      headline.appendChild(badge);
+    });
     mid.appendChild(headline);
     var sub = [];
     if (skill.scope) { sub.push(skill.scope + " scope"); }
-    if (skill.path) { sub.push(skill.path); }
+    installPaths(skill).forEach(function (p) { sub.push(p); });
     if (sub.length) { mid.appendChild(el("div", "skill-sub", sub.join("  ·  "))); }
     summary.appendChild(mid);
 
@@ -1389,6 +1433,7 @@ SCRIPT = r"""
     var loc = [];
     if (group.harness_label) { loc.push(group.harness_label); }
     if (group.path) { loc.push(group.path); }
+    (group.also_at || []).forEach(function (p) { loc.push(p); });
     if (loc.length) { body.appendChild(el("div", "step-loc", loc.join("  ·  "))); }
     body.appendChild(el("div", "what", group.decision));
 
@@ -1432,10 +1477,13 @@ SCRIPT = r"""
     var note = document.getElementById("cost-note");
     var costBlocks = document.getElementById("cost-blocks");
 
+    /* A skill installed for two harnesses is in both bills, since both
+       sessions load it. */
     var byHarness = {};
     data.skills.forEach(function (skill) {
-      var key = skill.harness_label || "Unknown";
-      (byHarness[key] = byHarness[key] || []).push(skill);
+      harnessLabels(skill).forEach(function (key) {
+        (byHarness[key] = byHarness[key] || []).push(skill);
+      });
     });
 
     /* Groups in the order the report ranked them, then a group built here for

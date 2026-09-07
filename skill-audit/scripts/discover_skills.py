@@ -68,6 +68,41 @@ PROJECT_SKILL_DIRS = [
     (os.path.join(".gemini", "skills"), "gemini"),
 ]
 
+# Harnesses that load skills from a directory they do not own. Each row is a
+# documented read, and discovery credits a skill to every harness that loads
+# the directory it sits in, so a harness's count is what that harness actually
+# loads rather than what was installed under its name:
+#
+# - OpenCode searches ~/.claude/skills, .claude/skills, ~/.agents/skills, and
+#   .agents/skills alongside its own two directories.
+# - Cursor reads .agents/skills and ~/.agents/skills and, for compatibility,
+#   .claude/skills, .codex/skills, ~/.claude/skills, and ~/.codex/skills.
+# - Gemini CLI treats ~/.agents/skills and .agents/skills as aliases of its
+#   own user and workspace directories.
+# - Codex documents $HOME/.agents/skills as its user-level location and scans
+#   .agents/skills from the working directory up to the repository root.
+# - OpenClaw reads ~/.agents/skills as personal agent skills, but only while
+#   it runs from its default state directory.
+#
+# Only harnesses present on the machine are credited, so nothing is counted
+# for a session nobody runs, and a directory none of whose readers is present
+# keeps the name of the harness that owns it. The user-level rows apply to the
+# default directories, which the other harnesses name literally; a home moved
+# with CLAUDE_CONFIG_DIR or CODEX_HOME is read by its own harness alone.
+USER_DIR_READERS = {
+    "claude": ("claude", "opencode", "cursor"),
+    "codex": ("codex", "cursor"),
+    "agents": ("codex", "opencode", "gemini", "cursor", "openclaw"),
+}
+PROJECT_DIR_READERS = {
+    os.path.join(".claude", "skills"): ("claude", "opencode", "cursor"),
+    os.path.join(".codex", "skills"): ("codex", "cursor"),
+    os.path.join(".opencode", "skills"): ("opencode",),
+    os.path.join(".agents", "skills"): ("codex", "opencode", "gemini", "cursor"),
+    os.path.join(".cursor", "skills"): ("cursor",),
+    os.path.join(".gemini", "skills"): ("gemini",),
+}
+
 MAX_ANCESTOR_LEVELS = 10
 
 
@@ -180,11 +215,40 @@ def _openclaw_workspaces(state_dirs):
     return out
 
 
+def _present_harnesses(home, xdg, claude_home, codex_home, openclaw_state_dirs):
+    """Slugs of the harnesses that have a home directory on this machine.
+
+    A harness makes its home directory the first time it runs, so a missing
+    one is a reliable sign the harness has never loaded anything here.
+    Crediting a shared directory to a harness that is not installed would
+    count skills for sessions nobody runs, so presence gates the credit.
+    """
+    present = set()
+    if os.path.isdir(claude_home) or os.path.isdir(os.path.join(home, ".claude")):
+        present.add("claude")
+    if os.path.isdir(codex_home) or os.path.isdir(os.path.join(home, ".codex")):
+        present.add("codex")
+    if os.path.isdir(os.path.join(xdg, "opencode")):
+        present.add("opencode")
+    if os.path.isdir(os.path.join(home, ".gemini")):
+        present.add("gemini")
+    if os.path.isdir(os.path.join(home, ".cursor")):
+        present.add("cursor")
+    if any(os.path.isdir(state_dir) for state_dir in openclaw_state_dirs):
+        present.add("openclaw")
+    return present
+
+
 def default_search_paths():
     """Built-in skill roots for mainstream harnesses.
 
-    Each entry is {"path", "scope", "harness"}. Paths that do not exist are
-    still reported (with exists=false) so users can see what was checked.
+    Each entry is {"path", "scope", "harness", "readers"}. Paths that do not
+    exist are still reported (with exists=false) so users can see what was
+    checked. "harness" names the harness whose directory a root is, and
+    "readers" lists every harness present on this machine that loads skills
+    from it, which is who a skill found there is credited to. A root none of
+    whose readers is present keeps its owner's name, so the shared convention
+    reports as such on a machine without any harness that reads it.
 
     Three environment variables relocate harness homes and are honored the way
     the harnesses themselves honor them: CLAUDE_CONFIG_DIR for Claude Code,
@@ -196,38 +260,77 @@ def default_search_paths():
     home = os.path.expanduser("~")
     cwd = os.getcwd()
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
-    claude_home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
-    codex_home = os.environ.get("CODEX_HOME") or os.path.join(home, ".codex")
+    default_claude = os.path.join(home, ".claude")
+    default_codex = os.path.join(home, ".codex")
+    claude_home = os.environ.get("CLAUDE_CONFIG_DIR") or default_claude
+    codex_home = os.environ.get("CODEX_HOME") or default_codex
     # Every OpenClaw root hangs off a state directory, and more than one can
     # hold skills, so they are resolved together rather than one root at a
     # time. The first is the one OpenClaw would use.
     openclaw_state_dirs = _openclaw_state_dirs(home)
+    present = _present_harnesses(home, xdg, claude_home, codex_home,
+                                 openclaw_state_dirs)
 
-    user_roots = [
-        (os.path.join(claude_home, "skills"), "claude"),
-        (os.path.join(codex_home, "skills"), "codex"),
-        (os.path.join(xdg, "opencode", "skills"), "opencode"),
-        (os.path.join(home, ".agents", "skills"), "shared"),
-        # The skills CLI's universal install target for its "global" scope.
-        (os.path.join(xdg, "agents", "skills"), "shared"),
-        (os.path.join(home, ".gemini", "skills"), "gemini"),
-        (os.path.join(home, ".cursor", "skills"), "cursor"),
+    def same_dir(a, b):
+        return os.path.realpath(a) == os.path.realpath(b)
+
+    def root(path, harness, scope, readers):
+        return {"path": path, "scope": scope, "harness": harness,
+                "readers": [h for h in readers if h in present]}
+
+    # The other harnesses name the default directories literally, so a home
+    # moved elsewhere is read by its own harness alone.
+    claude_readers = (USER_DIR_READERS["claude"]
+                      if same_dir(claude_home, default_claude) else ("claude",))
+    codex_readers = (USER_DIR_READERS["codex"]
+                     if same_dir(codex_home, default_codex) else ("codex",))
+    # OpenClaw adds ~/.agents/skills only while its isDefaultStateDir() holds,
+    # which compares the state directory it resolved against ~/.openclaw. An
+    # override pointing elsewhere fails that test, and so does the legacy
+    # ~/.clawdbot fallback even with nothing overridden, so the credit follows
+    # the state directory OpenClaw would actually use, not the variable alone.
+    agents_readers = list(USER_DIR_READERS["agents"])
+    if not same_dir(openclaw_state_dirs[0], os.path.join(home, ".openclaw")):
+        agents_readers.remove("openclaw")
+
+    paths = [
+        root(os.path.join(claude_home, "skills"), "claude", "user", claude_readers),
+        root(os.path.join(codex_home, "skills"), "codex", "user", codex_readers),
+        # Codex ships skills of its own, such as skill-creator and
+        # skill-installer, and keeps them in a dot-directory inside its skills
+        # directory, marked by a .codex-system-skills.marker file. The walk
+        # prunes dot-directories, so they are a root in their own right, under
+        # a scope that says they came with the harness rather than from the
+        # user. A session loads them like any other skill.
+        root(os.path.join(codex_home, "skills", ".system"), "codex", "builtin",
+             ("codex",)),
+        root(os.path.join(xdg, "opencode", "skills"), "opencode", "user",
+             ("opencode",)),
+        root(os.path.join(home, ".agents", "skills"), "shared", "user",
+             agents_readers),
+        # The skills CLI's universal install target for its "global" scope. No
+        # harness documents reading it directly, so it stays with the shared
+        # convention.
+        root(os.path.join(xdg, "agents", "skills"), "shared", "user", ()),
+        root(os.path.join(home, ".gemini", "skills"), "gemini", "user", ("gemini",)),
+        root(os.path.join(home, ".cursor", "skills"), "cursor", "user", ("cursor",)),
     ]
-    user_roots.extend((os.path.join(state_dir, "skills"), "openclaw")
-                      for state_dir in openclaw_state_dirs)
+    paths.extend(root(os.path.join(state_dir, "skills"), "openclaw", "user",
+                      ("openclaw",))
+                 for state_dir in openclaw_state_dirs)
     if os.environ.get("CLAUDE_CONFIG_DIR"):
-        user_roots.append((os.path.join(home, ".claude", "skills"), "claude"))
+        paths.append(root(os.path.join(default_claude, "skills"), "claude", "user",
+                          USER_DIR_READERS["claude"]))
     if os.environ.get("CODEX_HOME"):
-        user_roots.append((os.path.join(home, ".codex", "skills"), "codex"))
-
-    paths = []
-    for path, harness in user_roots:
-        paths.append({"path": path, "scope": "user", "harness": harness})
+        paths.append(root(os.path.join(default_codex, "skills"), "codex", "user",
+                          USER_DIR_READERS["codex"]))
+        paths.append(root(os.path.join(default_codex, "skills", ".system"), "codex",
+                          "builtin", ("codex",)))
 
     # Codex also loads administrator-managed skills from a system location.
     if os.name == "posix":
-        paths.append({"path": os.path.join(os.sep, "etc", "codex", "skills"),
-                      "scope": "system", "harness": "codex"})
+        paths.append(root(os.path.join(os.sep, "etc", "codex", "skills"), "codex",
+                          "system", ("codex",)))
 
     # OpenClaw materializes the skills its plugins ship into a directory it
     # owns outright, separate from the managed skills a user installs, and
@@ -238,7 +341,7 @@ def default_search_paths():
     for i, state_dir in enumerate(openclaw_state_dirs):
         candidate = os.path.join(state_dir, "plugin-skills")
         if i == 0 or os.path.isdir(candidate):
-            paths.append({"path": candidate, "scope": "plugin", "harness": "openclaw"})
+            paths.append(root(candidate, "openclaw", "plugin", ("openclaw",)))
 
     # An OpenClaw agent's own workspace outranks every user-level root it
     # reads, so a skill there is the one that actually loads. The resolved
@@ -248,14 +351,14 @@ def default_search_paths():
         for rel in ("skills", os.path.join(".agents", "skills")):
             candidate = os.path.join(workspace, rel)
             if i == 0 or os.path.isdir(candidate):
-                paths.append({"path": candidate,
-                              "scope": "project", "harness": "openclaw"})
+                paths.append(root(candidate, "openclaw", "project", ("openclaw",)))
 
     for rel, harness in PROJECT_SKILL_DIRS:
-        paths.append({"path": os.path.join(cwd, rel),
-                      "scope": "project", "harness": harness})
-    paths.append({"path": os.path.join(cwd, "skills"),
-                  "scope": "project", "harness": "shared"})
+        paths.append(root(os.path.join(cwd, rel), harness, "project",
+                          PROJECT_DIR_READERS[rel]))
+    # No harness documents the bare directory, so it stays with the shared
+    # convention.
+    paths.append(root(os.path.join(cwd, "skills"), "shared", "project", ()))
 
     # Ancestors are added only when the directory actually exists, so the
     # reported search-path list stays readable: the working directory's own
@@ -265,8 +368,8 @@ def default_search_paths():
         for rel, harness in PROJECT_SKILL_DIRS:
             candidate = os.path.join(ancestor, rel)
             if os.path.isdir(candidate):
-                paths.append({"path": candidate,
-                              "scope": "project", "harness": harness})
+                paths.append(root(candidate, harness, "project",
+                                  PROJECT_DIR_READERS[rel]))
 
     # Claude Code plugins bundle skills inside the plugin cache. The cache has
     # carried several layouts (marketplaces/<mp>/{plugins,external_plugins}/
@@ -274,17 +377,11 @@ def default_search_paths():
     # root is walked rather than guessing one shape. Cached-but-disabled
     # plugins are inventoried too: the cache is what the harness loads from,
     # and a skill sitting there is one toggle away from being live.
-    paths.append({
-        "path": os.path.join(claude_home, "plugins"),
-        "scope": "plugin",
-        "harness": "claude",
-    })
+    paths.append(root(os.path.join(claude_home, "plugins"), "claude", "plugin",
+                      ("claude",)))
     if os.environ.get("CLAUDE_CONFIG_DIR"):
-        paths.append({
-            "path": os.path.join(home, ".claude", "plugins"),
-            "scope": "plugin",
-            "harness": "claude",
-        })
+        paths.append(root(os.path.join(default_claude, "plugins"), "claude", "plugin",
+                          ("claude",)))
 
     return paths
 
@@ -430,21 +527,38 @@ def build_skill_entry(skill_dir, scope, harness):
     }
 
 
+def _install_sites(skill_dir, entry):
+    """Where one found skill directory counts as installed.
+
+    A root several harnesses read yields one site per credited harness, all at
+    the same path, so the skill counts for each of them. A root with no reader
+    present, or one supplied by hand without a reader list, falls back to the
+    harness that owns it, so nothing found is ever left without a harness.
+    """
+    harnesses = entry.get("readers") or [entry["harness"]]
+    return [{"path": skill_dir, "harness": harness, "scope": entry["scope"],
+             "root": entry["path"]}
+            for harness in harnesses]
+
+
 def build_inventory(search_paths):
     """Walk the search paths and build the full inventory document."""
     resolved_paths = []
-    seen_dirs = set()
+    by_real = {}
     skills = []
 
     for entry in search_paths:
         path = entry["path"]
         exists = os.path.isdir(path)
-        resolved_paths.append({
+        record = {
             "path": path,
             "scope": entry["scope"],
             "harness": entry["harness"],
             "exists": exists,
-        })
+        }
+        if "readers" in entry:
+            record["readers"] = list(entry["readers"])
+        resolved_paths.append(record)
         if not exists:
             continue
 
@@ -456,10 +570,29 @@ def build_inventory(search_paths):
 
         for skill_dir in candidates:
             real = os.path.realpath(skill_dir)
-            if real in seen_dirs:
+            sites = _install_sites(skill_dir, entry)
+            existing = by_real.get(real)
+            if existing is not None:
+                # The same directory reached again, through a symlink into a
+                # harness directory or a directory several harnesses read. It
+                # is one skill, scanned once and reported once, and every
+                # place it is reachable from is recorded so each harness that
+                # loads it is credited.
+                known = {(s["path"], s["harness"], s["scope"])
+                         for s in existing["installs"]}
+                for site in sites:
+                    key = (site["path"], site["harness"], site["scope"])
+                    if key not in known:
+                        known.add(key)
+                        existing["installs"].append(site)
                 continue
-            seen_dirs.add(real)
-            skills.append(build_skill_entry(skill_dir, entry["scope"], entry["harness"]))
+            # The first harness credited for the first root that reaches a
+            # directory is the primary one: it names the id and leads every
+            # surface, with the rest listed beside it.
+            skill = build_skill_entry(skill_dir, entry["scope"], sites[0]["harness"])
+            skill["installs"] = sites
+            by_real[real] = skill
+            skills.append(skill)
 
     skills.sort(key=lambda s: (s["harness"], s["scope"], s["name"], s["path"]))
 
@@ -512,7 +645,9 @@ def main(argv=None):
               % (len(skills), len(searched)))
         for p in inventory["search_paths"]:
             if p["exists"]:
-                count = sum(1 for s in skills if s["path"].startswith(p["path"]))
+                count = sum(1 for s in skills
+                            if any(site.get("root") == p["path"]
+                                   for site in s.get("installs", [])))
                 print("  %-60s %s/%s  %d skill(s)"
                       % (p["path"], p["harness"], p["scope"], count))
         print("Inventory written to %s" % args.out)

@@ -330,7 +330,6 @@ def context_tax(inventory):
         metadata_text = "%s %s" % (raw.get("name") or skill["name"],
                                    raw.get("description") or "")
         always_on = estimate_tokens(metadata_text)
-        always_on_total += always_on
         harness = skill["harness"]
         scope = skill.get("scope")
         label = harness_label(harness, scope)
@@ -361,6 +360,10 @@ def context_tax(inventory):
             if site["scope"] == "plugin":
                 member["plugin"] = True
         for site_label, member in memberships.items():
+            # The pooled total is the sum across every install, so a skill
+            # credited to two harnesses is in it twice, the same as it is in
+            # two subtotals; the total always equals the subtotals added up.
+            always_on_total += always_on
             group = groups.setdefault(site_label, {
                 "harness": member["harness"],
                 "label": site_label,
@@ -393,9 +396,9 @@ def context_tax(inventory):
                              -r["always_on_tokens"], r["skill"]))
     installed = [g for g in by_harness if g["installed"]]
     return {
-        # The sum across every install, kept for machine consumers of
-        # findings.json; no rendered surface quotes it, because no session
-        # pays it.
+        # The sum across every install, which is the subtotals added up, kept
+        # for machine consumers of findings.json; no rendered surface quotes
+        # it, because no session pays it.
         "always_on_total": always_on_total,
         # What one session carries at most: the heaviest harness, not the sum.
         # With nothing installed anywhere the two are the same figure.

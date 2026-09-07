@@ -635,6 +635,64 @@ def check_empty_inventory_reports_cost(failures):
             % section.strip())
 
 
+def check_multi_harness_cost_adds_up(failures):
+    """A skill loaded by two harnesses is billed to both, and the total agrees.
+
+    The per-harness subtotals are what a reader acts on, and the pooled
+    always_on_total is documented as the sum across every install, so the two
+    have to stay consistent: a skill credited to two harnesses through its
+    installs belongs in both subtotals and twice in the pooled total. A skill
+    with no installs list is the older single-site shape and still has to be
+    billed once.
+    """
+    import build_report
+
+    def entry(sid, name, harness, tokens_text, installs=None):
+        e = {
+            "id": sid, "name": name, "harness": harness, "scope": "user",
+            "path": "/x/%s/skills/%s" % (harness, name),
+            "frontmatter": {"raw": {"name": name, "description": tokens_text}},
+            "body": {"token_estimate": 10},
+            "resource_token_estimate": 5,
+        }
+        if installs is not None:
+            e["installs"] = installs
+        return e
+
+    shared = entry("claude::both", "both", "claude", "shared " * 40, installs=[
+        {"harness": "claude", "scope": "user", "path": "/x/claude/skills/both"},
+        {"harness": "codex", "scope": "user", "path": "/x/agents/skills/both"},
+    ])
+    only = entry("codex::alone", "alone", "codex", "alone " * 20)
+    tax = build_report.context_tax({"skills": [shared, only], "search_paths": []})
+
+    groups = {g["harness"]: g for g in tax["by_harness"]}
+    shared_cost = next(r for r in tax["rows"] if r["skill"] == "both")["always_on_tokens"]
+    alone_cost = next(r for r in tax["rows"] if r["skill"] == "alone")["always_on_tokens"]
+    if set(groups) != {"claude", "codex"}:
+        failures.append("multi-harness cost grouped into %s rather than claude and codex"
+                        % sorted(groups))
+        return
+    if groups["claude"]["always_on_tokens"] != shared_cost:
+        failures.append("the Claude Code subtotal does not carry the skill installed for it")
+    if groups["codex"]["always_on_tokens"] != shared_cost + alone_cost:
+        failures.append("the Codex subtotal does not carry both skills installed for it")
+    if groups["claude"]["skill_count"] != 1 or groups["codex"]["skill_count"] != 2:
+        failures.append("per-harness skill counts do not count a shared skill for each harness")
+    total = sum(g["always_on_tokens"] for g in tax["by_harness"])
+    if tax["always_on_total"] != total:
+        failures.append(
+            "always_on_total is %d but the subtotals sum to %d; the pooled figure "
+            "is documented as the sum across every install, so a skill credited "
+            "to two harnesses has to be in it twice"
+            % (tax["always_on_total"], total))
+    if tax["always_on_per_session"] != groups["codex"]["always_on_tokens"]:
+        failures.append("always_on_per_session is not the heaviest subtotal")
+    if len(tax["rows"]) != 2:
+        failures.append("cost rows list a skill more than once; rows are per skill, "
+                        "with harness_labels naming every harness")
+
+
 def check_rubric_weights(failures):
     """The rubric's stated weights and the scoring code must agree.
 
@@ -672,13 +730,15 @@ def main():
     check_skill_ids_unique(failures)
     check_backstop_not_mutable(failures)
     check_empty_inventory_reports_cost(failures)
+    check_multi_harness_cost_adds_up(failures)
     check_rubric_weights(failures)
 
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
           "self-audit cleanliness, self-exclusion scope, fixture banners, "
           "discovery reach, per-harness search coverage and crediting, "
           "shared-root fallback, id uniqueness, "
-          "backstop evasions, empty-inventory cost state, rubric weights.")
+          "backstop evasions, empty-inventory cost state, multi-harness cost "
+          "totals, rubric weights.")
     print("Self-audit: %d finding(s) against the running scanner (must be 0); "
           "%d finding(s) when a modified copy is scanned (must be above 0)."
           % (own, copied))

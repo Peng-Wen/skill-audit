@@ -355,10 +355,13 @@ def context_tax(inventory):
             member = memberships.setdefault(site_label, {
                 "harness": str(site["harness"] or "unknown").strip().lower(),
                 "installed": is_named_harness(site["harness"]),
-                "plugin": False,
+                # Plugin-dependent only while every install for this harness
+                # is one: a user install reaching the same directory loads
+                # whether or not the plugin is enabled, so one such site takes
+                # the skill out of the plugin share.
+                "plugin": True,
             })
-            if site["scope"] == "plugin":
-                member["plugin"] = True
+            member["plugin"] = member["plugin"] and site["scope"] == "plugin"
         for site_label, member in memberships.items():
             # The pooled total is the sum across every install, so a skill
             # credited to two harnesses is in it twice, the same as it is in

@@ -726,21 +726,39 @@ def check_multi_harness_cost_adds_up(failures):
         {"harness": "codex", "scope": "user", "path": "/x/agents/skills/both"},
     ])
     only = entry("codex::alone", "alone", "codex", "alone " * 20)
-    tax = build_report.context_tax({"skills": [shared, only], "search_paths": []})
+    # A plugin-cache skill that a user install also reaches loads whether or
+    # not the plugin is enabled, so it is not part of the plugin share; one
+    # only reachable through the cache is.
+    linked = entry("claude::linked", "linked", "claude", "linked " * 20, installs=[
+        {"harness": "claude", "scope": "plugin", "path": "/x/claude/plugins/p/skills/linked"},
+        {"harness": "claude", "scope": "user", "path": "/x/claude/skills/linked"},
+    ])
+    cached = entry("claude::cached", "cached", "claude", "cached " * 20, installs=[
+        {"harness": "claude", "scope": "plugin", "path": "/x/claude/plugins/p/skills/cached"},
+    ])
+    tax = build_report.context_tax(
+        {"skills": [shared, only, linked, cached], "search_paths": []})
 
     groups = {g["harness"]: g for g in tax["by_harness"]}
-    shared_cost = next(r for r in tax["rows"] if r["skill"] == "both")["always_on_tokens"]
-    alone_cost = next(r for r in tax["rows"] if r["skill"] == "alone")["always_on_tokens"]
+    cost_of = {r["skill"]: r["always_on_tokens"] for r in tax["rows"]}
     if set(groups) != {"claude", "codex"}:
         failures.append("multi-harness cost grouped into %s rather than claude and codex"
                         % sorted(groups))
         return
-    if groups["claude"]["always_on_tokens"] != shared_cost:
-        failures.append("the Claude Code subtotal does not carry the skill installed for it")
-    if groups["codex"]["always_on_tokens"] != shared_cost + alone_cost:
+    if groups["claude"]["always_on_tokens"] != (
+            cost_of["both"] + cost_of["linked"] + cost_of["cached"]):
+        failures.append("the Claude Code subtotal does not carry every skill installed for it")
+    if groups["codex"]["always_on_tokens"] != cost_of["both"] + cost_of["alone"]:
         failures.append("the Codex subtotal does not carry both skills installed for it")
-    if groups["claude"]["skill_count"] != 1 or groups["codex"]["skill_count"] != 2:
+    if groups["claude"]["skill_count"] != 3 or groups["codex"]["skill_count"] != 2:
         failures.append("per-harness skill counts do not count a shared skill for each harness")
+    if groups["claude"]["plugin_count"] != 1 or \
+            groups["claude"]["plugin_tokens"] != cost_of["cached"]:
+        failures.append(
+            "the plugin share counts %d skill(s) worth %d tokens; only the skill "
+            "reachable through the plugin cache alone belongs in it, since a user "
+            "install of the same directory loads whether or not the plugin is enabled"
+            % (groups["claude"]["plugin_count"], groups["claude"]["plugin_tokens"]))
     total = sum(g["always_on_tokens"] for g in tax["by_harness"])
     if tax["always_on_total"] != total:
         failures.append(
@@ -748,9 +766,11 @@ def check_multi_harness_cost_adds_up(failures):
             "is documented as the sum across every install, so a skill credited "
             "to two harnesses has to be in it twice"
             % (tax["always_on_total"], total))
-    if tax["always_on_per_session"] != groups["codex"]["always_on_tokens"]:
-        failures.append("always_on_per_session is not the heaviest subtotal")
-    if len(tax["rows"]) != 2:
+    heaviest = max(g["always_on_tokens"] for g in tax["by_harness"])
+    if tax["always_on_per_session"] != heaviest:
+        failures.append("always_on_per_session is %d but the heaviest subtotal is %d"
+                        % (tax["always_on_per_session"], heaviest))
+    if len(tax["rows"]) != 4:
         failures.append("cost rows list a skill more than once; rows are per skill, "
                         "with harness_labels naming every harness")
 

@@ -103,7 +103,7 @@ OpenCode documents that it searches `.opencode/skills`, `.claude/skills`, `.agen
 Cursor reads `.agents/skills` and `~/.agents/skills` and, for compatibility, the Claude and Codex directories at both levels.
 Gemini CLI treats `~/.agents/skills` and `.agents/skills` as aliases of `~/.gemini/skills` and `.gemini/skills`.
 Codex documents `$HOME/.agents/skills` as its user-level location and scans `.agents/skills` from the working directory up to the repository root.
-OpenClaw reads `~/.agents/skills` as personal agent skills, and leaves that root out when `OPENCLAW_STATE_DIR` points anywhere other than `~/.openclaw`.
+OpenClaw reads `~/.agents/skills` as personal agent skills only while the state directory it resolved is `~/.openclaw`, which is how its loader gates that root; an `OPENCLAW_STATE_DIR` override pointing elsewhere and the legacy `~/.clawdbot` fallback both leave it out.
 The Agent Skills format started under `.claude/skills`, so a large body of skills lives at that path whatever harness reads it.
 The rows apply to the default directories, which the other harnesses name literally; a home moved with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is read by its own harness alone.
 

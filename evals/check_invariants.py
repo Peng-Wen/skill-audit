@@ -491,6 +491,68 @@ def check_shared_root_without_readers(failures):
         _shutil.rmtree(base, ignore_errors=True)
 
 
+def check_openclaw_legacy_state_skips_personal_skills(failures):
+    """OpenClaw is credited for ~/.agents/skills only from its default state.
+
+    OpenClaw's loader adds the personal skills root only while its
+    isDefaultStateDir() holds, and that compares the state directory it
+    resolved against ~/.openclaw. A machine still running from the legacy
+    ~/.clawdbot fallback fails that test with nothing overridden, so it does
+    not load ~/.agents/skills at all. The credit has to follow the loader:
+    OpenClaw's own roots under the legacy directory count for it, and the
+    shared home directory does not, so with no other reader present it keeps
+    the shared label.
+    """
+    import json
+    import shutil as _shutil
+
+    scratch = os.environ.get("TMPDIR", "/tmp")
+    base = os.path.join(scratch, "skill-audit-claw-legacy-state")
+    if os.path.exists(base):
+        _shutil.rmtree(base)
+    fake_home = os.path.join(base, "home")
+    _write_min_skill(os.path.join(fake_home, ".clawdbot", "skills", "probe-claw-only"),
+                     "probe-claw-only")
+    _write_min_skill(os.path.join(fake_home, ".agents", "skills", "probe-personal"),
+                     "probe-personal")
+    work = os.path.join(base, "work")
+    os.makedirs(os.path.join(work, ".git"), exist_ok=True)
+
+    env = dict(os.environ)
+    env["HOME"] = fake_home
+    env["USERPROFILE"] = fake_home
+    env["XDG_CONFIG_HOME"] = os.path.join(fake_home, ".config")
+    for var in ("SKILL_AUDIT_PATHS", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+                "OPENCLAW_STATE_DIR", "OPENCLAW_WORKSPACE_DIR",
+                "OPENCLAW_PROFILE", "OPENCLAW_HOME"):
+        env.pop(var, None)
+
+    out = os.path.join(base, "inventory.json")
+    try:
+        subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "discover_skills.py"),
+             "--out", out, "--quiet"],
+            cwd=work, env=env, check=True)
+        with io.open(out, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        credited = {}
+        for s in inventory["skills"]:
+            credited[s["name"]] = {site.get("harness")
+                                   for site in s.get("installs") or []}
+        if credited.get("probe-claw-only") != {"openclaw"}:
+            failures.append(
+                "a skill under the legacy ~/.clawdbot/skills was credited to %s "
+                "rather than to OpenClaw" % sorted(credited.get("probe-claw-only") or []))
+        if credited.get("probe-personal") != {"shared"}:
+            failures.append(
+                "a skill under ~/.agents/skills was credited to %s on a machine "
+                "running OpenClaw from the legacy ~/.clawdbot fallback; OpenClaw "
+                "loads that root only from ~/.openclaw, and no other reader is "
+                "present" % sorted(credited.get("probe-personal") or []))
+    finally:
+        _shutil.rmtree(base, ignore_errors=True)
+
+
 def check_backstop_not_mutable(failures):
     """A skill must not be able to talk its own findings down.
 
@@ -727,6 +789,7 @@ def main():
     check_discovery_reach(failures)
     check_default_search_coverage(failures)
     check_shared_root_without_readers(failures)
+    check_openclaw_legacy_state_skips_personal_skills(failures)
     check_skill_ids_unique(failures)
     check_backstop_not_mutable(failures)
     check_empty_inventory_reports_cost(failures)
@@ -736,7 +799,7 @@ def main():
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
           "self-audit cleanliness, self-exclusion scope, fixture banners, "
           "discovery reach, per-harness search coverage and crediting, "
-          "shared-root fallback, id uniqueness, "
+          "shared-root fallback, OpenClaw legacy-state credit, id uniqueness, "
           "backstop evasions, empty-inventory cost state, multi-harness cost "
           "totals, rubric weights.")
     print("Self-audit: %d finding(s) against the running scanner (must be 0); "

@@ -284,8 +284,11 @@ def default_search_paths():
                       if same_dir(claude_home, default_claude) else ("claude",))
     codex_readers = (USER_DIR_READERS["codex"]
                      if same_dir(codex_home, default_codex) else ("codex",))
-    # OpenClaw reads the shared home directory only from its default state
-    # directory, so that credit follows the state directory it would use.
+    # OpenClaw adds ~/.agents/skills only while its isDefaultStateDir() holds,
+    # which compares the state directory it resolved against ~/.openclaw. An
+    # override pointing elsewhere fails that test, and so does the legacy
+    # ~/.clawdbot fallback even with nothing overridden, so the credit follows
+    # the state directory OpenClaw would actually use, not the variable alone.
     agents_readers = list(USER_DIR_READERS["agents"])
     if not same_dir(openclaw_state_dirs[0], os.path.join(home, ".openclaw")):
         agents_readers.remove("openclaw")

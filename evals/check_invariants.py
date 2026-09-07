@@ -354,22 +354,39 @@ def check_only_the_shipped_skill_is_publishable(failures):
     # The two directions need opposite biases. For a skill that must stay
     # unpublished, demanding the plain spelling is safe: the worst case is a
     # build failure telling the author to write it plainly. For the shipped
-    # skill the same strictness is the bug, because any spelling that resolves
-    # to true hides it, and YAML has several. `internal: !!bool "true"` and
-    # `internal: &flag true` both read as the bare token to this detector yet
-    # the installer honours both, verified by listing a repo that plants them.
-    # So the shipped skill may not carry the key at all, in any form.
+    # skill that strictness is the bug, because anything resolving to a true
+    # `metadata.internal` hides the only skill this repo publishes and the
+    # install silently carries nothing.
+    #
+    # Enumerating the spellings does not converge. The installer honours the
+    # bare key, a double or single quoted key, the explicit `? internal` form
+    # and a flow mapping written inline on the `metadata:` line, each verified
+    # by listing a repo that plants them. So the rule here is not about
+    # spelling at all: the shipped skill's metadata may not contain the word,
+    # which no quoting or key syntax can get around. Its metadata holds a
+    # version and a repository URL and has no use for it.
     shipped_text = io.open(os.path.join(REPO, shipped), encoding="utf-8").read()
     if shipped_text.startswith("---\n") and "\n---" in shipped_text:
         shipped_fm = shipped_text[4:shipped_text.index("\n---", 4)]
-        declared = re.search(r"^[ \t]*internal[ \t]*:", shipped_fm, re.M)
-        if declared:
+        region = []
+        lines = shipped_fm.split("\n")
+        for i, line in enumerate(lines):
+            if not re.match(r"^metadata[ \t]*:", line):
+                continue
+            region.append(line)
+            for rest in lines[i + 1:]:
+                if rest.strip() and not rest[:1].isspace():
+                    break
+                region.append(rest)
+        guilty = [r for r in region if "internal" in r.lower()]
+        if guilty:
             failures.append(
-                "%s declares an `internal` key (%r). Any spelling of it that "
-                "resolves to true hides the only skill this repo publishes, and "
-                "`npx skills add` then installs nothing at all, so the shipped "
-                "skill carries no such key. The flag belongs on everything else."
-                % (shipped, declared.group(0).strip()))
+                "%s mentions `internal` in its metadata (%r). Any spelling that "
+                "resolves to a true `metadata.internal` hides the only skill "
+                "this repo publishes, and `npx skills add` then installs nothing "
+                "at all, so the shipped skill's metadata does not use the word. "
+                "The flag belongs on everything else."
+                % (shipped, guilty[0].strip()))
     else:
         failures.append("%s has no frontmatter to check" % shipped)
 

@@ -218,8 +218,78 @@ def check_only_the_shipped_skill_is_publishable(failures):
             "proving nothing; confirm the fixtures are still committed")
         return
 
-    unquoted_true = re.compile(r"^[ \t]+internal:[ \t]*true[ \t]*(#.*)?$", re.M)
-    mentions_internal = re.compile(r"^[ \t]+internal:", re.M)
+    def metadata_block(frontmatter):
+        """The lines under a top-level `metadata:` key, and their indent.
+
+        The flag only counts where the CLI reads it. An `internal: true`
+        indented under some other key, or nested a level deeper inside
+        metadata, is a different path than `metadata.internal` and would not
+        exempt the skill, so the search is confined to this block.
+        """
+        lines = frontmatter.split("\n")
+        for i, line in enumerate(lines):
+            if not re.match(r"^metadata:[ \t]*(#.*)?$", line):
+                continue
+            block = []
+            for rest in lines[i + 1:]:
+                if rest.strip() and not rest[:1].isspace():
+                    break
+                block.append(rest)
+            entries = [b for b in block if b.strip()]
+            if not entries:
+                return [], None
+            indent = len(entries[0]) - len(entries[0].lstrip())
+            return entries, indent
+        return None, None
+
+    def flag_state(frontmatter):
+        """One of 'ok', 'quoted', 'misparented', or 'absent'."""
+        entries, indent = metadata_block(frontmatter)
+        if entries:
+            own = [e for e in entries
+                   if len(e) - len(e.lstrip()) == indent and e.strip().startswith("internal:")]
+            if own:
+                value = own[0].split(":", 1)[1].split("#")[0].strip()
+                return "ok" if value == "true" else "quoted"
+        if re.search(r"^[ \t]+internal:", frontmatter, re.M):
+            return "misparented"
+        return "absent"
+
+    reasons = {
+        "quoted": ("sets metadata.internal, but not as an unquoted `true`. The CLI "
+                   "compares against the boolean, so a quoted value reads as a "
+                   "string and the skill is published anyway."),
+        "misparented": ("sets an `internal` key, but not directly under `metadata`. "
+                        "The CLI reads `metadata.internal` and nothing else, so the "
+                        "skill is published anyway."),
+        "absent": ("would be published by `npx skills add`, which walks every skill "
+                   "directory in this repo. Add `internal: true` under metadata, "
+                   "unquoted, so the CLI keeps it out of user installs while it "
+                   "still loads here."),
+    }
+    # The detector is the whole value of this check, so it is exercised before
+    # it is trusted. Each case is a way a flag can look right and still leave
+    # the skill publishable, which is exactly how the first version of this
+    # check passed a skill whose flag sat under the wrong parent.
+    probes = [
+        ("metadata:\n  internal: true", "ok"),
+        ('metadata:\n  version: "1"\n  internal: true', "ok"),
+        ("metadata:\n  internal: true  # comment", "ok"),
+        ("config:\n  internal: true", "misparented"),
+        ("metadata:\n  config:\n    internal: true", "misparented"),
+        ('metadata:\n  internal: "true"', "quoted"),
+        ("metadata:\n  internal: 'true'", "quoted"),
+        ('metadata:\n  version: "1"', "absent"),
+        ("name: x", "absent"),
+    ]
+    for frontmatter, want in probes:
+        got = flag_state(frontmatter)
+        if got != want:
+            failures.append(
+                "the publishable-skill detector read %r as %r rather than %r, so "
+                "it cannot be trusted to tell a working internal flag from one "
+                "the CLI would ignore" % (frontmatter, got, want))
+
     for rel in sorted(tracked):
         if rel == shipped:
             continue
@@ -229,19 +299,9 @@ def check_only_the_shipped_skill_is_publishable(failures):
             failures.append("%s has no frontmatter to carry the internal flag" % rel)
             continue
         frontmatter = text[4:text.index(marker, 4)]
-        if unquoted_true.search(frontmatter):
-            continue
-        if mentions_internal.search(frontmatter):
-            failures.append(
-                "%s sets metadata.internal, but not as an unquoted `true`. The "
-                "CLI compares against the boolean, so a quoted value reads as a "
-                "string and the skill is published anyway." % rel)
-        else:
-            failures.append(
-                "%s would be published by `npx skills add`, which walks every "
-                "skill directory in this repo. Add `internal: true` under "
-                "metadata, unquoted, so the CLI keeps it out of user installs "
-                "while it still loads here." % rel)
+        state = flag_state(frontmatter)
+        if state != "ok":
+            failures.append("%s %s" % (rel, reasons[state]))
 
 
 def _write_min_skill(skill_dir, name):

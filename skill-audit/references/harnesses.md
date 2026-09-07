@@ -30,6 +30,16 @@ System level:
 | --- | --- |
 | Codex | `/etc/codex/skills`, the administrator-managed location Codex documents |
 
+Built in, shipped with the harness itself:
+
+| Harness | Path |
+| --- | --- |
+| Codex | `$CODEX_HOME/skills/.system`, default `~/.codex/skills/.system` |
+
+Codex bundles skills of its own, such as `skill-creator` and `skill-installer`, and keeps them in a dot-directory inside its skills directory, marked by a `.codex-system-skills.marker` file.
+A session loads them like any other skill, so the audit inventories them under the `builtin` scope, which keeps them apart from what the user installed.
+The discovery walk prunes dot-directories, which is why this directory is a root of its own rather than something found under `~/.codex/skills`.
+
 Project level, relative to the working directory:
 
 | Harness | Path |
@@ -77,14 +87,35 @@ Two overrides exist, both useful for auditing something that is not installed ye
 - `--paths` on `discover_skills.py`, or the `SKILL_AUDIT_PATHS` environment variable, takes a list of roots separated by the platform path separator.
 - `--skill <dir>` audits exactly one skill directory, which is the right way to vet a downloaded or cloned skill before installing it.
 
-## Why several harnesses share directories
+## Why several harnesses share directories, and who a skill is credited to
 
 Many harnesses read more than their own directory.
-OpenCode documents that it also loads `.claude/skills`, `~/.claude/skills`, `.agents/skills`, and `~/.agents/skills`, and Codex's current documentation centers on the shared `.agents/skills` convention rather than a private directory.
-Gemini CLI treats `.agents/skills` and `~/.agents/skills` as aliases of its own two directories, and OpenClaw reads `~/.agents/skills` as personal agent skills alongside its managed directory.
+
+| Directory | Loaded by |
+| --- | --- |
+| `~/.claude/skills` and `.claude/skills` | Claude Code, OpenCode, Cursor |
+| `~/.codex/skills` and `.codex/skills` | Codex, Cursor |
+| `~/.agents/skills` | Codex, OpenCode, Gemini CLI, Cursor, and OpenClaw from its default state directory |
+| `.agents/skills` | Codex, OpenCode, Gemini CLI, Cursor |
+| Every other directory above | Its own harness |
+
+OpenCode documents that it searches `.opencode/skills`, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`, `~/.claude/skills`, and `~/.agents/skills`.
+Cursor reads `.agents/skills` and `~/.agents/skills` and, for compatibility, the Claude and Codex directories at both levels.
+Gemini CLI treats `~/.agents/skills` and `.agents/skills` as aliases of `~/.gemini/skills` and `.gemini/skills`.
+Codex documents `$HOME/.agents/skills` as its user-level location and scans `.agents/skills` from the working directory up to the repository root.
+OpenClaw reads `~/.agents/skills` as personal agent skills, and leaves that root out when `OPENCLAW_STATE_DIR` points anywhere other than `~/.openclaw`.
 The Agent Skills format started under `.claude/skills`, so a large body of skills lives at that path whatever harness reads it.
-The audit deduplicates by resolved real path, so a skill reachable from several harnesses is inventoried once rather than repeatedly.
-Symbolic links between harness directories are common and resolve to the same entry for the same reason.
+The rows apply to the default directories, which the other harnesses name literally; a home moved with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is read by its own harness alone.
+
+The audit credits a skill to every harness in that table that is present on the machine, where present means the harness has a home directory: `~/.claude`, `~/.codex`, `~/.config/opencode`, `~/.gemini`, `~/.cursor`, or an OpenClaw state directory.
+A harness that is not installed is never credited, so no count describes a session nobody runs.
+A directory none of whose readers is present keeps the name of the harness it belongs to, so `~/.agents/skills` on a machine without any of its readers is reported under the shared convention.
+Each search path in `inventory.json` carries the harnesses it was credited to under `readers`.
+
+Each skill is inventoried once by resolved real path, however many directories reach it, and the inventory lists every reach under `installs`, one entry per harness credited.
+The common case is what `npx skills add` lays down for Claude Code and Codex together: one real copy under `~/.agents/skills` and a symlink to it from `~/.claude/skills`.
+That is one entry, credited to Claude Code through the link and to Codex, and to every other present reader, through the shared directory.
+The harness counts in a report therefore answer "how many skills does this harness load", and can add up to more than the number of skills found, and the context cost section bills such a skill to every harness that loads it.
 
 ## Delivering the result on each harness
 

@@ -33,7 +33,7 @@ Produced by `scripts/discover_skills.py`.
   "generated_at": "2026-08-21T00:00:00Z",
   "host": {"os": "darwin", "python": "3.13.0"},
   "search_paths": [
-    {"path": "/Users/me/.claude/skills", "scope": "user", "harness": "claude", "exists": true}
+    {"path": "/Users/me/.claude/skills", "scope": "user", "harness": "claude", "exists": true, "readers": ["claude"]}
   ],
   "skills": [
     {
@@ -44,6 +44,9 @@ Produced by `scripts/discover_skills.py`.
       "skill_md_path": "/Users/me/.claude/skills/example-skill/SKILL.md",
       "harness": "claude",
       "scope": "user",
+      "installs": [
+        {"path": "/Users/me/.claude/skills/example-skill", "harness": "claude", "scope": "user", "root": "/Users/me/.claude/skills"}
+      ],
       "frontmatter": {"raw": {}, "parse_ok": true, "parse_error": null},
       "body": {"chars": 1200, "lines": 60, "token_estimate": 300, "truncated": false},
       "files": [{"path_rel": "SKILL.md", "bytes": 1400, "kind": "text", "ext": ".md"}],
@@ -54,7 +57,11 @@ Produced by `scripts/discover_skills.py`.
 }
 ```
 
-`scope` is one of `user`, `project`, `plugin`, `system`, `override`, or `explicit`.
+`scope` is one of `user`, `project`, `plugin`, `builtin`, `system`, `override`, or `explicit`.
+`builtin` marks skills a harness ships with itself, such as the ones under `$CODEX_HOME/skills/.system`.
+
+`readers` on a search path lists the harnesses present on the machine that load skills from it, which is who a skill found there is credited to.
+`installs` on a skill lists every root that reaches its resolved directory, one entry per harness credited, each with the path the directory goes by under that root.
 
 `id` is `harness::name`, and is the stable key every later stage groups by. When
 two discovered skills would produce the same id, the later one in the
@@ -72,8 +79,10 @@ Where there is no harness to name, the scope answers instead: a directory passed
 `dashboard.html` names it in the masthead, on a badge on every skill card, on every step, and on the heading of every context cost block, and turns it into a filter when more than one harness is installed.
 The scope qualifies the name wherever one skill needs separating from another install of itself, as in `Claude Code (plugin)` against `Claude Code (user)`.
 
-The harness named is the one whose directory the skill was found in.
-Several harnesses also read each other's skill directories, as [harnesses.md](harnesses.md) records, so a skill installed for one can load in another.
+`harness` and `scope` are the primary install, from the first root that reached the directory, and `id` is minted from them.
+`installs` lists every install, because several harnesses read each other's skill directories and the shared `.agents` convention, as [harnesses.md](harnesses.md) records.
+A skill symlinked into `~/.claude/skills` from `~/.agents/skills` is one entry with an install for Claude Code and one for each present harness that reads the shared directory.
+Every surface that names a harness names all of them, the per-harness counts count a skill once for each harness it is installed for, and the context cost section bills it to each of those harnesses.
 Both surfaces say so among their stated limits.
 
 ## findings.json

@@ -236,13 +236,22 @@ def check_default_search_coverage(failures):
 
     A synthetic home and project are built with one probe skill in each
     location the mainstream harnesses document (Claude Code including its
-    plugin cache and CLAUDE_CONFIG_DIR override, Codex including CODEX_HOME
-    and its legacy default, OpenCode under XDG, the shared .agents and XDG
-    agents conventions, Gemini CLI, Cursor, OpenClaw, and project-level
-    directories from the working directory up to the repository root).
-    Discovery then runs exactly as a user would run it, with no --paths, in
-    that environment. Every probe has to come back, or a harness's skills
-    have silently fallen out of the audit.
+    plugin cache and CLAUDE_CONFIG_DIR override, Codex including CODEX_HOME,
+    its legacy default, and the built-in skills it ships under .system,
+    OpenCode under XDG, the shared .agents and XDG agents conventions, Gemini
+    CLI, Cursor, OpenClaw, and project-level directories from the working
+    directory up to the repository root). Discovery then runs exactly as a
+    user would run it, with no --paths, in that environment. Every probe has
+    to come back, or a harness's skills have silently fallen out of the
+    audit.
+
+    Each probe also has to be credited to every harness that loads its
+    directory, and only to those. Every harness home exists in the synthetic
+    home, so a directory several harnesses read credits all of them, while
+    the override forms are read by their own harness alone. The last probe
+    reproduces an `npx skills add` install, one real copy under the shared
+    convention and a symlink to it from the Claude Code directory: that has
+    to be one entry, credited to both sides, never two.
     """
     import json
     import shutil as _shutil
@@ -255,32 +264,43 @@ def check_default_search_coverage(failures):
     codex_home = os.path.join(base, "codex-home")
     claude_home = os.path.join(base, "claude-home")
 
+    agents_readers = {"codex", "opencode", "gemini", "cursor", "openclaw"}
     expected = {
-        # name -> harness the entry should be attributed to
-        "probe-claude-user": "claude",        # $CLAUDE_CONFIG_DIR/skills
-        "probe-claude-legacy": "claude",      # ~/.claude/skills, override set
-        "probe-claude-plugin": "claude",      # plugin cache, marketplace deep
-        "probe-codex-home": "codex",          # $CODEX_HOME/skills
-        "probe-codex-legacy": "codex",        # ~/.codex/skills, override set
-        "probe-opencode": "opencode",         # $XDG_CONFIG_HOME/opencode/skills
-        "probe-agents-home": "shared",        # ~/.agents/skills
-        "probe-agents-xdg": "shared",         # $XDG_CONFIG_HOME/agents/skills
-        "probe-gemini": "gemini",
-        "probe-cursor": "cursor",
-        "probe-claw-managed": "openclaw",     # ~/.openclaw/skills
-        "probe-claw-legacy": "openclaw",      # ~/.clawdbot/skills
-        "probe-claw-plugin": "openclaw",      # ~/.openclaw/plugin-skills
-        "probe-claw-workspace": "openclaw",   # default agent workspace
-        "probe-claw-agent": "openclaw",       # a sibling agent's workspace
+        # name -> every harness the entry has to be credited to
+        "probe-claude-user": {"claude"},                  # $CLAUDE_CONFIG_DIR/skills
+        "probe-claude-legacy": {"claude", "opencode", "cursor"},  # ~/.claude/skills
+        "probe-claude-plugin": {"claude"},                # plugin cache, marketplace deep
+        "probe-codex-home": {"codex"},                    # $CODEX_HOME/skills
+        "probe-codex-builtin": {"codex"},                 # $CODEX_HOME/skills/.system
+        "probe-codex-legacy": {"codex", "cursor"},        # ~/.codex/skills, override set
+        "probe-codex-legacy-builtin": {"codex"},          # ~/.codex/skills/.system
+        "probe-opencode": {"opencode"},                   # $XDG_CONFIG_HOME/opencode/skills
+        "probe-agents-home": agents_readers,              # ~/.agents/skills
+        "probe-agents-xdg": {"shared"},                   # $XDG_CONFIG_HOME/agents/skills
+        "probe-gemini": {"gemini"},
+        "probe-cursor": {"cursor"},
+        "probe-claw-managed": {"openclaw"},               # ~/.openclaw/skills
+        "probe-claw-legacy": {"openclaw"},                # ~/.clawdbot/skills
+        "probe-claw-plugin": {"openclaw"},                # ~/.openclaw/plugin-skills
+        "probe-claw-workspace": {"openclaw"},             # default agent workspace
+        "probe-claw-agent": {"openclaw"},                 # a sibling agent's workspace
         # Every OpenClaw root hangs off a state directory, so the former one
         # has to carry its plugin and workspace directories too, not just its
         # skills directory.
-        "probe-claw-legacy-plugin": "openclaw",
-        "probe-claw-legacy-workspace": "openclaw",
-        "probe-repo-root": "shared",          # .agents/skills at the repo root
-        "probe-mid-ancestor": "codex",        # .codex/skills in a mid ancestor
-        "probe-cwd": "opencode",              # .opencode/skills in cwd
-        "probe-cwd-gemini": "gemini",         # .gemini/skills in cwd
+        "probe-claw-legacy-plugin": {"openclaw"},
+        "probe-claw-legacy-workspace": {"openclaw"},
+        "probe-repo-root": {"codex", "opencode", "gemini", "cursor"},  # .agents/skills at the repo root
+        "probe-mid-ancestor": {"codex", "cursor"},        # .codex/skills in a mid ancestor
+        "probe-cwd": {"opencode"},                        # .opencode/skills in cwd
+        "probe-cwd-gemini": {"gemini"},                   # .gemini/skills in cwd
+        # Real copy under ~/.agents/skills, symlink from ~/.claude/skills.
+        "probe-linked": {"claude", "opencode", "cursor"} | agents_readers,
+    }
+    # Skills a harness ships with itself carry their own scope, so a reader
+    # can tell them from what the user installed.
+    expected_scope = {
+        "probe-codex-builtin": "builtin",
+        "probe-codex-legacy-builtin": "builtin",
     }
 
     _write_min_skill(os.path.join(claude_home, "skills", "probe-claude-user"),
@@ -292,8 +312,13 @@ def check_default_search_coverage(failures):
         "skills", "probe-claude-plugin"), "probe-claude-plugin")
     _write_min_skill(os.path.join(codex_home, "skills", "probe-codex-home"),
                      "probe-codex-home")
+    _write_min_skill(os.path.join(codex_home, "skills", ".system", "probe-codex-builtin"),
+                     "probe-codex-builtin")
     _write_min_skill(os.path.join(fake_home, ".codex", "skills", "probe-codex-legacy"),
                      "probe-codex-legacy")
+    _write_min_skill(os.path.join(fake_home, ".codex", "skills", ".system",
+                                  "probe-codex-legacy-builtin"),
+                     "probe-codex-legacy-builtin")
     _write_min_skill(os.path.join(fake_home, ".config", "opencode", "skills",
                                   "probe-opencode"), "probe-opencode")
     _write_min_skill(os.path.join(fake_home, ".agents", "skills", "probe-agents-home"),
@@ -319,6 +344,18 @@ def check_default_search_coverage(failures):
     _write_min_skill(os.path.join(fake_home, ".clawdbot", "workspace", "skills",
                                   "probe-claw-legacy-workspace"),
                      "probe-claw-legacy-workspace")
+
+    # The layout `npx skills add --agent claude-code codex` produces: one real
+    # copy in the shared directory, and Claude Code's entry a link to it.
+    _write_min_skill(os.path.join(fake_home, ".agents", "skills", "probe-linked"),
+                     "probe-linked")
+    link_ok = True
+    try:
+        os.symlink(os.path.join(fake_home, ".agents", "skills", "probe-linked"),
+                   os.path.join(fake_home, ".claude", "skills", "probe-linked"))
+    except OSError:
+        link_ok = False
+        expected.pop("probe-linked")
 
     # Project tree: repo-root/.agents, a mid-level ancestor, and the cwd, with
     # discovery launched from the deepest directory.
@@ -357,16 +394,99 @@ def check_default_search_coverage(failures):
             cwd=leaf, env=env, check=True)
         with io.open(out, encoding="utf-8") as fh:
             inventory = json.load(fh)
-        found = {s["name"]: s["harness"] for s in inventory["skills"]}
-        for name, harness in sorted(expected.items()):
-            if name not in found:
+        found = {}
+        for s in inventory["skills"]:
+            found.setdefault(s["name"], []).append(s)
+        for name, harnesses in sorted(expected.items()):
+            entries = found.get(name) or []
+            if not entries:
                 failures.append(
                     "default search paths missed %s (expected under the %s "
-                    "harness layout)" % (name, harness))
-            elif found[name] != harness:
+                    "harness layout)" % (name, ", ".join(sorted(harnesses))))
+                continue
+            if len(entries) > 1:
                 failures.append(
-                    "%s was attributed to harness %r rather than %r"
-                    % (name, found[name], harness))
+                    "%s was inventoried %d times; a directory reached from more "
+                    "than one root has to be one entry with every reach listed "
+                    "under installs" % (name, len(entries)))
+                continue
+            entry = entries[0]
+            credited = {site.get("harness") for site in entry.get("installs") or []}
+            if credited != harnesses:
+                failures.append(
+                    "%s was credited to %s rather than %s"
+                    % (name, sorted(credited), sorted(harnesses)))
+            if entry.get("harness") not in harnesses:
+                failures.append(
+                    "%s carries primary harness %r, which is not among the "
+                    "harnesses that read it" % (name, entry.get("harness")))
+            scope = expected_scope.get(name)
+            if scope and (entry.get("scope") != scope or any(
+                    site.get("scope") != scope for site in entry.get("installs") or [])):
+                failures.append(
+                    "%s was inventoried under scope %r rather than %r"
+                    % (name, entry.get("scope"), scope))
+        if link_ok and len(found.get("probe-linked") or []) == 1:
+            reached = {site.get("path")
+                       for site in found["probe-linked"][0].get("installs") or []}
+            if len(reached) < 2:
+                failures.append(
+                    "the symlinked probe lists only %s under installs; both the "
+                    "link and its target have to be recorded" % sorted(reached))
+    finally:
+        _shutil.rmtree(base, ignore_errors=True)
+
+
+def check_shared_root_without_readers(failures):
+    """A shared directory none of whose readers is present keeps its name.
+
+    Crediting is gated on a harness being present, so a skill under the
+    shared convention is never counted for a session nobody runs. With no
+    harness home on the machine at all, the honest answer is the convention
+    itself, and the entry has to say so rather than guess at a reader.
+    """
+    import json
+    import shutil as _shutil
+
+    scratch = os.environ.get("TMPDIR", "/tmp")
+    base = os.path.join(scratch, "skill-audit-shared-orphan")
+    if os.path.exists(base):
+        _shutil.rmtree(base)
+    fake_home = os.path.join(base, "home")
+    _write_min_skill(os.path.join(fake_home, ".agents", "skills", "probe-orphan"),
+                     "probe-orphan")
+    work = os.path.join(base, "work")
+    os.makedirs(os.path.join(work, ".git"), exist_ok=True)
+
+    env = dict(os.environ)
+    env["HOME"] = fake_home
+    env["USERPROFILE"] = fake_home
+    env["XDG_CONFIG_HOME"] = os.path.join(fake_home, ".config")
+    for var in ("SKILL_AUDIT_PATHS", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+                "OPENCLAW_STATE_DIR", "OPENCLAW_WORKSPACE_DIR",
+                "OPENCLAW_PROFILE", "OPENCLAW_HOME"):
+        env.pop(var, None)
+
+    out = os.path.join(base, "inventory.json")
+    try:
+        subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "discover_skills.py"),
+             "--out", out, "--quiet"],
+            cwd=work, env=env, check=True)
+        with io.open(out, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        entries = [s for s in inventory["skills"] if s["name"] == "probe-orphan"]
+        if len(entries) != 1:
+            failures.append(
+                "the shared-only probe was inventoried %d times rather than once"
+                % len(entries))
+            return
+        credited = {site.get("harness") for site in entries[0].get("installs") or []}
+        if credited != {"shared"} or entries[0].get("harness") != "shared":
+            failures.append(
+                "a skill under ~/.agents/skills on a machine with no harness "
+                "present was credited to %s rather than to the shared "
+                "convention; presence has to gate the credit" % sorted(credited))
     finally:
         _shutil.rmtree(base, ignore_errors=True)
 
@@ -548,6 +668,7 @@ def main():
     check_fixture_banners(failures)
     check_discovery_reach(failures)
     check_default_search_coverage(failures)
+    check_shared_root_without_readers(failures)
     check_skill_ids_unique(failures)
     check_backstop_not_mutable(failures)
     check_empty_inventory_reports_cost(failures)
@@ -555,7 +676,8 @@ def main():
 
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
           "self-audit cleanliness, self-exclusion scope, fixture banners, "
-          "discovery reach, per-harness search coverage, id uniqueness, "
+          "discovery reach, per-harness search coverage and crediting, "
+          "shared-root fallback, id uniqueness, "
           "backstop evasions, empty-inventory cost state, rubric weights.")
     print("Self-audit: %d finding(s) against the running scanner (must be 0); "
           "%d finding(s) when a modified copy is scanned (must be above 0)."

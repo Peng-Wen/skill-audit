@@ -693,9 +693,11 @@ _UNKNOWN_HARNESS_LABELS = {
 }
 
 HARNESS_NOTE = (
-    "The harness named for a skill is the one whose directory it was found in. "
-    "Several harnesses also read each other's skill directories, so a skill "
-    "installed for one can load in another."
+    "A skill counts for every harness present on this machine that loads the "
+    "directory it was found in, so one installed under the shared .agents "
+    "convention counts for each harness that reads it, and one symlinked "
+    "between two harness directories is inventoried once and credited to "
+    "both."
 )
 
 
@@ -736,21 +738,83 @@ def harness_display(harness, scope=None):
     return label
 
 
+def install_sites(entry):
+    """Every place a skill is installed, as dicts of harness, scope, and path.
+
+    Discovery records one inventory entry per resolved directory and lists
+    every root that reaches it under "installs", one site per harness
+    credited, so a skill symlinked into one harness's directory from the
+    shared convention is one skill with several sites. A document, cost row,
+    or hand-built entry that carries only the primary harness and scope is
+    read as a single site, so older inputs keep working.
+    """
+    sites = entry.get("installs") if isinstance(entry, dict) else None
+    out = []
+    if isinstance(sites, list):
+        for site in sites:
+            if isinstance(site, dict):
+                out.append({"harness": site.get("harness"),
+                            "scope": site.get("scope"),
+                            "path": site.get("path")})
+    if not out:
+        out.append({"harness": entry.get("harness"),
+                    "scope": entry.get("scope"),
+                    "path": entry.get("path")})
+    return out
+
+
+def install_labels(entry):
+    """Distinct harness labels a skill is installed for, primary first."""
+    labels = []
+    for site in install_sites(entry):
+        label = harness_label(site["harness"], site["scope"])
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def installed_for_parts(entry):
+    """Each named install as "Harness (scope)", primary first, without repeats.
+
+    Only installs with a harness to name are listed: a skill audited from a
+    path has none, and the callers say so in their own words rather than
+    printing a placeholder here.
+    """
+    parts = []
+    for site in install_sites(entry):
+        if not is_named_harness(site["harness"]):
+            continue
+        text = harness_display(site["harness"], site["scope"])
+        if text not in parts:
+            parts.append(text)
+    return parts
+
+
+def installed_for_display(entry):
+    """One line naming every install: "Claude Code (user), Codex (user)"."""
+    return ", ".join(installed_for_parts(entry))
+
+
 def harness_breakdown(entries):
     """Count skills per harness, most-installed first.
 
     entries is an iterable of dicts carrying "harness" and, optionally,
-    "scope". The scope only qualifies an entry that has no harness to name, so
-    installs of one harness stay in one bucket however they were installed.
+    "scope" and "installs". A skill installed for two harnesses counts once
+    for each, so the counts answer "how many skills does this harness load"
+    and can add up to more than the number of skills found. The scope only
+    qualifies an entry that has no harness to name, so installs of one
+    harness stay in one bucket however they were installed.
     """
     counts = {}
     for entry in entries:
-        harness = entry.get("harness")
-        scope = entry.get("scope")
-        label = harness_label(harness, scope)
-        slug = str(harness or "unknown").strip().lower()
-        key = (label, slug)
-        counts[key] = counts.get(key, 0) + 1
+        credited = set()
+        for site in install_sites(entry):
+            harness = site["harness"]
+            label = harness_label(harness, site["scope"])
+            slug = str(harness or "unknown").strip().lower()
+            credited.add((label, slug))
+        for key in credited:
+            counts[key] = counts.get(key, 0) + 1
     rows = [{"label": label, "harness": slug, "count": n}
             for (label, slug), n in counts.items()]
     rows.sort(key=lambda r: (-r["count"], r["label"]))
@@ -903,9 +967,9 @@ def build_action_plan(findings, summary, skill_info=None):
 
     Grouping is by skill id, and each entry carries the skill's location when
     the caller supplies skill_info, a mapping of skill id to a dict with
-    "path", "harness", and "scope": names can collide across scopes, and
-    whoever acts on the plan needs to know which directory, under which
-    harness, it is about. Findings resolved by an adjudication are not action
+    "path", "harness", "scope", and optionally "installs": names can collide
+    across scopes, and whoever acts on the plan needs to know which directory,
+    under which harnesses, it is about. Findings resolved by an adjudication are not action
     items and are skipped.
     """
     by_skill = {}
@@ -937,19 +1001,29 @@ def build_action_plan(findings, summary, skill_info=None):
             })
 
         where_installed = (skill_info or {}).get(sid) or {}
+        sites = install_sites(where_installed)
+        primary_path = where_installed.get("path") or sites[0].get("path")
+        # The same directory can be reachable under more than one name, as
+        # when a harness directory holds a symlink to the real copy. Every
+        # name is listed so an edit lands wherever the reader goes looking.
+        also_at = []
+        for site in sites:
+            extra = site.get("path")
+            if extra and extra != primary_path and extra not in also_at:
+                also_at.append(extra)
         plan.append({
             "skill": info.get("name") or sid,
             "skill_id": sid,
-            "path": where_installed.get("path"),
+            "path": primary_path,
+            "also_at": also_at,
             "harness": where_installed.get("harness"),
             "scope": where_installed.get("scope"),
             # A skill that is not installed anywhere has a path and nothing
             # else to say, so the label is left off rather than filled with a
-            # placeholder the prompt would then have to explain.
-            "harness_label": (
-                harness_display(where_installed.get("harness"),
-                                where_installed.get("scope"))
-                if is_named_harness(where_installed.get("harness")) else None),
+            # placeholder the prompt would then have to explain. Every harness
+            # it is installed for is named, since an agent editing one copy
+            # needs to know the others load the same files.
+            "harness_label": installed_for_display(where_installed) or None,
             "grade": grade,
             "severity": entries[0]["severity"],
             "headline": RULES.get(entries[0]["rule_id"], {}).get("title", entries[0]["rule_id"]),
@@ -988,6 +1062,8 @@ def build_agent_prompt(plan, skill_count):
             lines.append("   Installed for: %s" % fence_safe(group["harness_label"]))
         if group.get("path"):
             lines.append("   Location: %s" % fence_safe(group["path"]))
+        for extra in group.get("also_at") or []:
+            lines.append("   Also reachable at: %s" % fence_safe(extra))
         lines.append("   Decision: %s" % fence_safe(group["decision"]))
         for item in group["items"]:
             lines.append("   - [%s] %s %s at %s"

@@ -30,8 +30,10 @@ from skill_audit_lib import (  # noqa: E402
     build_agent_prompt,
     estimate_tokens,
     harness_breakdown,
-    harness_display,
     harness_label,
+    install_labels,
+    install_sites,
+    installed_for_parts,
     is_named_harness,
     local_now,
     read_json,
@@ -316,7 +318,9 @@ def context_tax(inventory):
     with two harnesses installed never pays both totals at the same time.
     The per-harness subtotals are what a reader can act on and what every
     surface renders; the pooled figures stay machine-readable fields in
-    findings.json and are never quoted as prose.
+    findings.json and are never quoted as prose. A skill installed for more
+    than one harness is in each of their subtotals, because each of those
+    sessions loads it.
     """
     rows = []
     groups = {}
@@ -330,39 +334,55 @@ def context_tax(inventory):
         harness = skill["harness"]
         scope = skill.get("scope")
         label = harness_label(harness, scope)
+        sites = install_sites(skill)
         rows.append({
             "skill_id": skill["id"],
             "skill": skill["name"],
             "harness": harness,
             "scope": scope,
             "harness_label": label,
+            "harness_labels": install_labels(skill),
+            "installs": sites,
             "always_on_tokens": always_on,
             "body_tokens": skill["body"]["token_estimate"],
             "resource_tokens": skill["resource_token_estimate"],
         })
         # Grouped by the name a reader sees, so two scopes of one harness land
-        # in the subtotal that one session actually pays.
-        group = groups.setdefault(label, {
-            "harness": str(harness or "unknown").strip().lower(),
-            "label": label,
-            "installed": is_named_harness(harness),
-            "skill_count": 0,
-            "always_on_tokens": 0,
-            "body_tokens": 0,
-            "resource_tokens": 0,
-            # A plugin's skills load only while that plugin is enabled, and the
-            # audit inventories the whole plugin cache, so this share of the
-            # subtotal is the part a session may not be paying at all.
-            "plugin_count": 0,
-            "plugin_tokens": 0,
-        })
-        group["skill_count"] += 1
-        group["always_on_tokens"] += always_on
-        group["body_tokens"] += skill["body"]["token_estimate"]
-        group["resource_tokens"] += skill["resource_token_estimate"]
-        if scope == "plugin":
-            group["plugin_count"] += 1
-            group["plugin_tokens"] += always_on
+        # in the subtotal that one session actually pays. A skill installed
+        # for two harnesses is in both bills, because both sessions load it.
+        memberships = {}
+        for site in sites:
+            site_label = harness_label(site["harness"], site["scope"])
+            member = memberships.setdefault(site_label, {
+                "harness": str(site["harness"] or "unknown").strip().lower(),
+                "installed": is_named_harness(site["harness"]),
+                "plugin": False,
+            })
+            if site["scope"] == "plugin":
+                member["plugin"] = True
+        for site_label, member in memberships.items():
+            group = groups.setdefault(site_label, {
+                "harness": member["harness"],
+                "label": site_label,
+                "installed": member["installed"],
+                "skill_count": 0,
+                "always_on_tokens": 0,
+                "body_tokens": 0,
+                "resource_tokens": 0,
+                # A plugin's skills load only while that plugin is enabled, and
+                # the audit inventories the whole plugin cache, so this share
+                # of the subtotal is the part a session may not be paying at
+                # all.
+                "plugin_count": 0,
+                "plugin_tokens": 0,
+            })
+            group["skill_count"] += 1
+            group["always_on_tokens"] += always_on
+            group["body_tokens"] += skill["body"]["token_estimate"]
+            group["resource_tokens"] += skill["resource_token_estimate"]
+            if member["plugin"]:
+                group["plugin_count"] += 1
+                group["plugin_tokens"] += always_on
 
     by_harness = sorted(groups.values(),
                         key=lambda g: (not g["installed"], -g["always_on_tokens"],
@@ -459,7 +479,7 @@ def render_report_md(findings, summary, tax, inventory, notes):
     for sid, info in entries:
         counts = info["counts"]
         skill = by_id.get(sid, {})
-        harness = harness_label(skill.get("harness"), skill.get("scope"))
+        harness = ", ".join(install_labels(skill))
         lines.append("| %s | %s | %s | %d | %d | %d | %d | %s |" % (
             display_name(sid, info), harness, info["grade"], counts["critical"],
             counts["high"], counts["medium"], counts["low"],
@@ -474,15 +494,25 @@ def render_report_md(findings, summary, tax, inventory, notes):
         skill = by_id.get(sid, {})
         lines.append("### %s (grade %s)" % (display_name(sid, info), info["grade"]))
         lines.append("")
-        if is_named_harness(skill.get("harness")):
-            lines.append("Installed for: **%s**"
-                         % harness_display(skill.get("harness"), skill.get("scope")))
+        parts = installed_for_parts(skill)
+        if parts:
+            lines.append("Installed for: %s" % ", ".join("**%s**" % p for p in parts))
         else:
             lines.append("Not installed for any harness; audited from a path.")
         lines.append("")
         if skill.get("path"):
             lines.append("Location: `%s`" % skill["path"])
             lines.append("")
+            # A symlinked install is the same directory under another name;
+            # naming every one keeps a reader from hunting for a second copy.
+            extra = []
+            for site in install_sites(skill):
+                if site.get("path") and site["path"] != skill["path"] \
+                        and site["path"] not in extra:
+                    extra.append(site["path"])
+            for reach in extra:
+                lines.append("Also reachable at: `%s`" % reach)
+                lines.append("")
         if not skill_findings:
             lines.append("No findings.")
             lines.append("")
@@ -518,7 +548,7 @@ def render_report_md(findings, summary, tax, inventory, notes):
     # has to cross-reference.
     plan = build_action_plan(findings, summary, {
         s["id"]: {"path": s.get("path"), "harness": s.get("harness"),
-                  "scope": s.get("scope")}
+                  "scope": s.get("scope"), "installs": s.get("installs")}
         for s in skills})
     lines.append("## Next steps")
     lines.append("")
@@ -537,6 +567,8 @@ def render_report_md(findings, summary, tax, inventory, notes):
                 lines.append("   - Installed for: %s" % group["harness_label"])
             if group.get("path"):
                 lines.append("   - Location: `%s`" % group["path"])
+            for extra in group.get("also_at") or []:
+                lines.append("   - Also reachable at: `%s`" % extra)
             for item in group["items"]:
                 lines.append("   - `%s` %s at `%s`: %s"
                              % (item["rule_id"], item["severity"], item["where"],
@@ -576,10 +608,14 @@ def render_report_md(findings, summary, tax, inventory, notes):
                          "pays more than its own subtotal.")
         lines.append("")
 
+        # A row is listed under every harness that loads the skill, so each
+        # table adds up to the subtotal above it.
         rows_by_label = {}
         for row in tax["rows"]:
-            label = harness_label(row.get("harness"), row.get("scope"))
-            rows_by_label.setdefault(label, []).append(row)
+            labels = (row.get("harness_labels")
+                      or [harness_label(row.get("harness"), row.get("scope"))])
+            for label in labels:
+                rows_by_label.setdefault(label, []).append(row)
 
         for group in tax["by_harness"]:
             lines.append("### %s" % group["label"])
@@ -701,9 +737,11 @@ def print_terminal_summary(findings, summary, tax, out_dir, inventory=None):
         skill = by_id.get(sid, {})
         skill_findings = [f for f in findings
                           if (f.get("skill_id") or f.get("skill")) == sid]
-        print(row(name[:32],
-                  harness_label(skill.get("harness"), skill.get("scope"))[:14],
-                  info["grade"], top_action(skill_findings)))
+        labels = install_labels(skill)
+        harness = labels[0]
+        if len(labels) > 1:
+            harness = "%s +%d" % (labels[0][:11], len(labels) - 1)
+        print(row(name[:32], harness[:14], info["grade"], top_action(skill_findings)))
     print("")
     # Per harness, since that is what one session loads. A pooled figure would
     # quote a session that never runs.

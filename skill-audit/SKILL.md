@@ -92,7 +92,7 @@ python3 "$SKILL_DIR/scripts/build_report.py" --scan skill-audit-work/scan_findin
 ```
 
 This merges both passes, drops malformed semantic entries and notes that it did so, grades each skill, computes the context cost per harness, and writes `findings.json` and `report.md`.
-Every skill is named with the harness it is installed for, so an audit spanning two harnesses never leaves the reader guessing which set a finding belongs to.
+Every skill is named with every harness it is installed for, so an audit spanning two harnesses never leaves the reader guessing which set a finding belongs to, and a skill both of them load is credited to both.
 
 `report.md` carries a **Next steps** section after the per-skill evidence it draws on: the skills that need a decision, worst first, each with the changes that carry that decision out.
 It ends with a ready-made block to hand an agent.

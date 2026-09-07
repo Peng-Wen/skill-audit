@@ -178,6 +178,72 @@ def check_fixture_banners(failures):
                     % os.path.relpath(path, REPO))
 
 
+def check_only_the_shipped_skill_is_publishable(failures):
+    """Nothing but skill-audit may reach a user through `npx skills add`.
+
+    The skills CLI treats a repository as a collection. It walks the repo root
+    one level deep and every agent skill container (`skills/`, `.claude/skills`,
+    `.codex/skills`, and the rest) three levels deep, and `--full-depth`, along
+    with the fallback it takes when it finds nothing, scans the whole tree. So
+    every SKILL.md committed here is a candidate for someone else's machine,
+    not only the one directory this project ships.
+
+    Two things must never travel that way. `.claude/skills/ship-pr` is written
+    for this repository alone, and at user level it would sit in context in
+    every project while its instructions pointed at this one. The fixtures
+    under evals/ matter more: several are working attack payloads, and a
+    `--full-depth` install once carried all of them.
+
+    The CLI's own exemption is `metadata.internal: true`, which it tests as
+    `metadata?.internal === true`, so the value has to be an unquoted YAML
+    boolean; quoted, it is a string and does not match. The test below reads
+    the raw frontmatter because the parser in this repo renders both forms as
+    the string "true" and cannot tell them apart.
+    """
+    import re
+    import subprocess as _subprocess
+
+    shipped = "skill-audit/SKILL.md"
+    tracked = _subprocess.run(
+        ["git", "-C", REPO, "ls-files", "*SKILL.md"],
+        capture_output=True, text=True, check=True).stdout.split()
+    if shipped not in tracked:
+        failures.append(
+            "the shipped skill is not tracked at %s, so this check cannot tell "
+            "what would be published" % shipped)
+        return
+    if len(tracked) < 2:
+        failures.append(
+            "no SKILL.md besides the shipped one is tracked, so this check is "
+            "proving nothing; confirm the fixtures are still committed")
+        return
+
+    unquoted_true = re.compile(r"^[ \t]+internal:[ \t]*true[ \t]*(#.*)?$", re.M)
+    mentions_internal = re.compile(r"^[ \t]+internal:", re.M)
+    for rel in sorted(tracked):
+        if rel == shipped:
+            continue
+        text = io.open(os.path.join(REPO, rel), encoding="utf-8").read()
+        marker = "\n---"
+        if not text.startswith("---\n") or marker not in text:
+            failures.append("%s has no frontmatter to carry the internal flag" % rel)
+            continue
+        frontmatter = text[4:text.index(marker, 4)]
+        if unquoted_true.search(frontmatter):
+            continue
+        if mentions_internal.search(frontmatter):
+            failures.append(
+                "%s sets metadata.internal, but not as an unquoted `true`. The "
+                "CLI compares against the boolean, so a quoted value reads as a "
+                "string and the skill is published anyway." % rel)
+        else:
+            failures.append(
+                "%s would be published by `npx skills add`, which walks every "
+                "skill directory in this repo. Add `internal: true` under "
+                "metadata, unquoted, so the CLI keeps it out of user installs "
+                "while it still loads here." % rel)
+
+
 def _write_min_skill(skill_dir, name):
     os.makedirs(skill_dir, exist_ok=True)
     with io.open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as fh:
@@ -806,6 +872,7 @@ def main():
     own = check_self_audit_clean(failures)
     copied = check_self_exclusion_is_identity_based(failures)
     check_fixture_banners(failures)
+    check_only_the_shipped_skill_is_publishable(failures)
     check_discovery_reach(failures)
     check_default_search_coverage(failures)
     check_shared_root_without_readers(failures)
@@ -818,6 +885,7 @@ def main():
 
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
           "self-audit cleanliness, self-exclusion scope, fixture banners, "
+          "publishable skills, "
           "discovery reach, per-harness search coverage and crediting, "
           "shared-root fallback, OpenClaw legacy-state credit, id uniqueness, "
           "backstop evasions, empty-inventory cost state, multi-harness cost "

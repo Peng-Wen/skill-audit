@@ -243,22 +243,39 @@ def check_only_the_shipped_skill_is_publishable(failures):
         return None, None
 
     def flag_state(frontmatter):
-        """One of 'ok', 'quoted', 'misparented', or 'absent'."""
+        """One of 'ok', 'quoted', 'malformed', 'misparented', or 'absent'.
+
+        YAML only reads `key: value` as a mapping entry when whitespace or a
+        line end follows the colon. `internal:true` is therefore the plain
+        scalar "internal:true", which makes metadata a string rather than a
+        record, and the installer's `metadata?.internal === true` never sees a
+        flag at all. A check that accepted that spelling would approve a skill
+        the CLI publishes, so it is called out separately from a value that
+        parses but is not the boolean.
+        """
         entries, indent = metadata_block(frontmatter)
         if entries:
             own = [e for e in entries
                    if len(e) - len(e.lstrip()) == indent and e.strip().startswith("internal:")]
             if own:
-                value = own[0].split(":", 1)[1].split("#")[0].strip()
+                entry = own[0].strip()
+                if not re.match(r"^internal:(?:[ \t]|$)", entry):
+                    return "malformed"
+                value = entry.split(":", 1)[1].split("#")[0].strip()
                 return "ok" if value == "true" else "quoted"
         if re.search(r"^[ \t]+internal:", frontmatter, re.M):
             return "misparented"
         return "absent"
 
     reasons = {
-        "quoted": ("sets metadata.internal, but not as an unquoted `true`. The CLI "
-                   "compares against the boolean, so a quoted value reads as a "
-                   "string and the skill is published anyway."),
+        "quoted": ("sets metadata.internal to something other than a bare `true`. "
+                   "The CLI compares against the boolean, so a quoted or empty "
+                   "value reads as something else and the skill is published "
+                   "anyway."),
+        "malformed": ("writes the flag with no space after the colon. YAML reads "
+                      "`internal:true` as a plain string, so metadata is not a "
+                      "mapping at all and the CLI finds no flag; write "
+                      "`internal: true`."),
         "misparented": ("sets an `internal` key, but not directly under `metadata`. "
                         "The CLI reads `metadata.internal` and nothing else, so the "
                         "skill is published anyway."),
@@ -279,6 +296,9 @@ def check_only_the_shipped_skill_is_publishable(failures):
         ("metadata:\n  config:\n    internal: true", "misparented"),
         ('metadata:\n  internal: "true"', "quoted"),
         ("metadata:\n  internal: 'true'", "quoted"),
+        ("metadata:\n  internal:", "quoted"),
+        ("metadata:\n  internal:true", "malformed"),
+        ("metadata:\n  internal:true  # looks right, parses as a string", "malformed"),
         ('metadata:\n  version: "1"', "absent"),
         ("name: x", "absent"),
     ]

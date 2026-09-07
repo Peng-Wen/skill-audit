@@ -259,19 +259,31 @@ def check_only_the_shipped_skill_is_publishable(failures):
                    if len(e) - len(e.lstrip()) == indent and e.strip().startswith("internal:")]
             if own:
                 entry = own[0].strip()
+                # One rule, written the way YAML reads the line: a colon then
+                # whitespace, one of the boolean tokens, and a comment only
+                # where a `#` is itself preceded by whitespace. Splitting the
+                # value out by hand is what let `internal:true` and
+                # `internal: true#c` through, and both are strings to a real
+                # parser. The three spellings are the YAML 1.2 core booleans,
+                # and each was confirmed against the installer itself by
+                # listing a repository that plants every shape below.
+                if re.match(r"^internal:[ \t]+(?:true|True|TRUE)(?:[ \t]+#.*)?[ \t]*$",
+                            entry):
+                    return "ok"
                 if not re.match(r"^internal:(?:[ \t]|$)", entry):
                     return "malformed"
-                value = entry.split(":", 1)[1].split("#")[0].strip()
-                return "ok" if value == "true" else "quoted"
+                return "quoted"
         if re.search(r"^[ \t]+internal:", frontmatter, re.M):
             return "misparented"
         return "absent"
 
     reasons = {
-        "quoted": ("sets metadata.internal to something other than a bare `true`. "
-                   "The CLI compares against the boolean, so a quoted or empty "
-                   "value reads as something else and the skill is published "
-                   "anyway."),
+        "quoted": ("sets metadata.internal to something other than the bare token "
+                   "`true`. The CLI compares against the boolean, so anything "
+                   "else is published anyway: a quoted string, an empty value, "
+                   "or a `#` with no whitespace before it, which YAML keeps as "
+                   "part of the scalar rather than starting a comment. Only "
+                   "`true`, `True` and `TRUE` are booleans."),
         "malformed": ("writes the flag with no space after the colon. YAML reads "
                       "`internal:true` as a plain string, so metadata is not a "
                       "mapping at all and the CLI finds no flag; write "
@@ -299,6 +311,12 @@ def check_only_the_shipped_skill_is_publishable(failures):
         ("metadata:\n  internal:", "quoted"),
         ("metadata:\n  internal:true", "malformed"),
         ("metadata:\n  internal:true  # looks right, parses as a string", "malformed"),
+        ("metadata:\n  internal: true #comment", "ok"),
+        ("metadata:\n  internal: true\t# tabbed comment", "ok"),
+        ("metadata:\n  internal: true#comment", "quoted"),
+        ("metadata:\n  internal: truthy", "quoted"),
+        ("metadata:\n  internal: True", "ok"),
+        ("metadata:\n  internal: TRUE", "ok"),
         ('metadata:\n  version: "1"', "absent"),
         ("name: x", "absent"),
     ]

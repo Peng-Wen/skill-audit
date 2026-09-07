@@ -333,13 +333,25 @@ def check_only_the_shipped_skill_is_publishable(failures):
     # to a full-tree scan when it finds nothing, and everything else here is
     # internal too, the result is an install with no skills at all rather than
     # a loud failure.
+    # The two directions need opposite biases. For a skill that must stay
+    # unpublished, demanding the plain spelling is safe: the worst case is a
+    # build failure telling the author to write it plainly. For the shipped
+    # skill the same strictness is the bug, because any spelling that resolves
+    # to true hides it, and YAML has several. `internal: !!bool "true"` and
+    # `internal: &flag true` both read as the bare token to this detector yet
+    # the installer honours both, verified by listing a repo that plants them.
+    # So the shipped skill may not carry the key at all, in any form.
     shipped_text = io.open(os.path.join(REPO, shipped), encoding="utf-8").read()
     if shipped_text.startswith("---\n") and "\n---" in shipped_text:
-        if flag_state(shipped_text[4:shipped_text.index("\n---", 4)]) == "ok":
+        shipped_fm = shipped_text[4:shipped_text.index("\n---", 4)]
+        declared = re.search(r"^[ \t]*internal[ \t]*:", shipped_fm, re.M)
+        if declared:
             failures.append(
-                "%s is marked `internal: true`, so `npx skills add` would hide "
-                "the only skill this repo publishes and install nothing. The "
-                "flag belongs on everything except the shipped skill." % shipped)
+                "%s declares an `internal` key (%r). Any spelling of it that "
+                "resolves to true hides the only skill this repo publishes, and "
+                "`npx skills add` then installs nothing at all, so the shipped "
+                "skill carries no such key. The flag belongs on everything else."
+                % (shipped, declared.group(0).strip()))
     else:
         failures.append("%s has no frontmatter to check" % shipped)
 

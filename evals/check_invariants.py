@@ -328,6 +328,21 @@ def check_only_the_shipped_skill_is_publishable(failures):
                 "it cannot be trusted to tell a working internal flag from one "
                 "the CLI would ignore" % (frontmatter, got, want))
 
+    # The guard cuts both ways. Marking the shipped skill internal would hide
+    # the one skill users are meant to get, and because the CLI only falls back
+    # to a full-tree scan when it finds nothing, and everything else here is
+    # internal too, the result is an install with no skills at all rather than
+    # a loud failure.
+    shipped_text = io.open(os.path.join(REPO, shipped), encoding="utf-8").read()
+    if shipped_text.startswith("---\n") and "\n---" in shipped_text:
+        if flag_state(shipped_text[4:shipped_text.index("\n---", 4)]) == "ok":
+            failures.append(
+                "%s is marked `internal: true`, so `npx skills add` would hide "
+                "the only skill this repo publishes and install nothing. The "
+                "flag belongs on everything except the shipped skill." % shipped)
+    else:
+        failures.append("%s has no frontmatter to check" % shipped)
+
     for rel in sorted(tracked):
         if rel == shipped:
             continue

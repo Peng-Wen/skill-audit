@@ -3,6 +3,7 @@ name: clean-markdown-helper
 description: Format and tidy Markdown documents, fixing heading levels, list markers, table alignment, and trailing whitespace. Use when the user asks to clean up, reformat, lint, or standardize a Markdown file, or mentions inconsistent headings or messy tables in their documentation.
 license: MIT
 metadata:
+  internal: true
   version: "1.0"
 ---
 

@@ -178,6 +178,255 @@ def check_fixture_banners(failures):
                     % os.path.relpath(path, REPO))
 
 
+def check_only_the_shipped_skill_is_publishable(failures):
+    """Nothing but skill-audit may reach a user through `npx skills add`.
+
+    The skills CLI treats a repository as a collection. It walks the repo root
+    one level deep and every agent skill container (`skills/`, `.claude/skills`,
+    `.codex/skills`, and the rest) three levels deep, and `--full-depth`, along
+    with the fallback it takes when it finds nothing, scans the whole tree. So
+    every SKILL.md committed here is a candidate for someone else's machine,
+    not only the one directory this project ships.
+
+    Two things must never travel that way. `.claude/skills/ship-pr` is written
+    for this repository alone, and at user level it would sit in context in
+    every project while its instructions pointed at this one. The fixtures
+    under evals/ matter more: several are working attack payloads, and a
+    `--full-depth` install once carried all of them.
+
+    This check is the fast offline approximation. CI holds the authoritative
+    one, asking the installer what this repository publishes and requiring the
+    answer to be skill-audit alone, in both its default and full-depth scans.
+
+    The CLI's own exemption is `metadata.internal: true`, which it tests as
+    `metadata?.internal === true`, so the value has to be an unquoted YAML
+    boolean; quoted, it is a string and does not match. The test below reads
+    the raw frontmatter because the parser in this repo renders both forms as
+    the string "true" and cannot tell them apart.
+    """
+    import re
+    import subprocess as _subprocess
+
+    shipped = "skill-audit/SKILL.md"
+    tracked = _subprocess.run(
+        ["git", "-C", REPO, "ls-files", "*SKILL.md"],
+        capture_output=True, text=True, check=True).stdout.split()
+    if shipped not in tracked:
+        failures.append(
+            "the shipped skill is not tracked at %s, so this check cannot tell "
+            "what would be published" % shipped)
+        return
+    if len(tracked) < 2:
+        failures.append(
+            "no SKILL.md besides the shipped one is tracked, so this check is "
+            "proving nothing; confirm the fixtures are still committed")
+        return
+
+    def metadata_block(frontmatter):
+        """The lines under a top-level `metadata:` key, and their indent.
+
+        The flag only counts where the CLI reads it. An `internal: true`
+        indented under some other key, or nested a level deeper inside
+        metadata, is a different path than `metadata.internal` and would not
+        exempt the skill, so the search is confined to this block.
+        """
+        lines = frontmatter.split("\n")
+        for i, line in enumerate(lines):
+            if not re.match(r"^metadata:[ \t]*(#.*)?$", line):
+                continue
+            block = []
+            for rest in lines[i + 1:]:
+                if rest.strip() and not rest[:1].isspace():
+                    break
+                block.append(rest)
+            entries = [b for b in block if b.strip()]
+            if not entries:
+                return [], None
+            indent = len(entries[0]) - len(entries[0].lstrip())
+            return entries, indent
+        return None, None
+
+    def flag_state(frontmatter):
+        """'ok', 'quoted', 'continued', 'tabbed', 'malformed', 'misparented', 'absent'.
+
+        YAML only reads `key: value` as a mapping entry when whitespace or a
+        line end follows the colon. `internal:true` is therefore the plain
+        scalar "internal:true", which makes metadata a string rather than a
+        record, and the installer's `metadata?.internal === true` never sees a
+        flag at all. A check that accepted that spelling would approve a skill
+        the CLI publishes, so it is called out separately from a value that
+        parses but is not the boolean.
+        """
+        entries, indent = metadata_block(frontmatter)
+        if entries:
+            own = [e for e in entries
+                   if len(e) - len(e.lstrip()) == indent and e.strip().startswith("internal:")]
+            # A tab in the indentation is not a working flag and not a
+            # hidden skill either: YAML forbids tabs there, so the whole
+            # frontmatter fails to parse and the installer skips the file with
+            # a warning rather than reading any flag out of it. The outcome is
+            # safe, but calling it "ok" would tell an author the flag works
+            # when the skill is simply broken everywhere.
+            if any("\t" in line[:len(line) - len(line.lstrip())] for line in entries):
+                return "tabbed"
+            if own:
+                # A plain scalar keeps going onto the following lines while
+                # they are more indented, blank lines included, so
+                # `internal: true` with `    false` under it is the string
+                # "true false" and the installer publishes the skill. Reading
+                # one physical line cannot see that, so a continuation is
+                # rejected outright.
+                position = entries.index(own[0])
+                following = entries[position + 1:position + 2]
+                if following and (len(following[0]) - len(following[0].lstrip())) > indent:
+                    return "continued"
+                entry = own[0].strip()
+                # One rule, written the way YAML reads the line: a colon then
+                # whitespace, one of the boolean tokens, and a comment only
+                # where a `#` is itself preceded by whitespace. Splitting the
+                # value out by hand is what let `internal:true` and
+                # `internal: true#c` through, and both are strings to a real
+                # parser. The three spellings are the YAML 1.2 core booleans,
+                # and each was confirmed against the installer itself by
+                # listing a repository that plants every shape below.
+                if re.match(r"^internal:[ \t]+(?:true|True|TRUE)(?:[ \t]+#.*)?[ \t]*$",
+                            entry):
+                    return "ok"
+                if not re.match(r"^internal:(?:[ \t]|$)", entry):
+                    return "malformed"
+                return "quoted"
+        if re.search(r"^[ \t]+internal:", frontmatter, re.M):
+            return "misparented"
+        return "absent"
+
+    reasons = {
+        "quoted": ("sets metadata.internal to something other than the bare token "
+                   "`true`. The CLI compares against the boolean, so anything "
+                   "else is published anyway: a quoted string, an empty value, "
+                   "or a `#` with no whitespace before it, which YAML keeps as "
+                   "part of the scalar rather than starting a comment. Only "
+                   "`true`, `True` and `TRUE` are booleans."),
+        "tabbed": ("indents its metadata with a tab. YAML forbids tabs in "
+                   "indentation, so this frontmatter does not parse at all and "
+                   "the installer skips the skill rather than reading a flag "
+                   "from it. Indent with spaces."),
+        "continued": ("writes the flag with a more indented line under it. YAML "
+                      "folds that into the value, so it becomes a string rather "
+                      "than a boolean and the skill is published; keep the value "
+                      "on one line."),
+        "malformed": ("writes the flag with no space after the colon. YAML reads "
+                      "`internal:true` as a plain string, so metadata is not a "
+                      "mapping at all and the CLI finds no flag; write "
+                      "`internal: true`."),
+        "misparented": ("sets an `internal` key, but not directly under `metadata`. "
+                        "The CLI reads `metadata.internal` and nothing else, so the "
+                        "skill is published anyway."),
+        "absent": ("would be published by `npx skills add`, which walks every skill "
+                   "directory in this repo. Add `internal: true` under metadata, "
+                   "unquoted, so the CLI keeps it out of user installs while it "
+                   "still loads here."),
+    }
+    # The detector is the whole value of this check, so it is exercised before
+    # it is trusted. Each case is a way a flag can look right and still leave
+    # the skill publishable, which is exactly how the first version of this
+    # check passed a skill whose flag sat under the wrong parent.
+    probes = [
+        ("metadata:\n  internal: true", "ok"),
+        ('metadata:\n  version: "1"\n  internal: true', "ok"),
+        ("metadata:\n  internal: true  # comment", "ok"),
+        ("config:\n  internal: true", "misparented"),
+        ("metadata:\n  config:\n    internal: true", "misparented"),
+        ('metadata:\n  internal: "true"', "quoted"),
+        ("metadata:\n  internal: 'true'", "quoted"),
+        ("metadata:\n  internal:", "quoted"),
+        ("metadata:\n  internal:true", "malformed"),
+        ("metadata:\n  internal:true  # looks right, parses as a string", "malformed"),
+        ("metadata:\n  internal: true #comment", "ok"),
+        ("metadata:\n  internal: true\t# tabbed comment", "ok"),
+        ("metadata:\n  internal: true#comment", "quoted"),
+        ("metadata:\n  internal: true\n    false", "continued"),
+        ("metadata:\n\tinternal: true", "tabbed"),
+        ("metadata:\n \tinternal: true", "tabbed"),
+        ("metadata:\n  internal: true\n\n    folded", "continued"),
+        ('metadata:\n  internal: true\n  version: "1"', "ok"),
+        ("metadata:\n  internal: true\n  nested:\n    a: b", "ok"),
+        ("metadata:\n  internal: truthy", "quoted"),
+        ("metadata:\n  internal: True", "ok"),
+        ("metadata:\n  internal: TRUE", "ok"),
+        ('metadata:\n  version: "1"', "absent"),
+        ("name: x", "absent"),
+    ]
+    for frontmatter, want in probes:
+        got = flag_state(frontmatter)
+        if got != want:
+            failures.append(
+                "the publishable-skill detector read %r as %r rather than %r, so "
+                "it cannot be trusted to tell a working internal flag from one "
+                "the CLI would ignore" % (frontmatter, got, want))
+
+    # The guard cuts both ways. Marking the shipped skill internal would hide
+    # the one skill users are meant to get, and because the CLI only falls back
+    # to a full-tree scan when it finds nothing, and everything else here is
+    # internal too, the result is an install with no skills at all rather than
+    # a loud failure.
+    # The two directions need opposite biases. For a skill that must stay
+    # unpublished, demanding the plain spelling is safe: the worst case is a
+    # build failure telling the author to write it plainly. For the shipped
+    # skill that strictness is the bug, because anything resolving to a true
+    # `metadata.internal` hides the only skill this repo publishes and the
+    # install then silently carries nothing.
+    #
+    # Enumerating spellings does not converge. The installer honours the bare
+    # key, quoted keys, the explicit `? internal` form, a flow mapping on the
+    # `metadata:` line, and all of those again under a quoted `"metadata":`
+    # parent. Each round of review found one more. So this check does not read
+    # the structure at all: the word may not appear anywhere in the shipped
+    # skill's frontmatter, which no quoting or key syntax can get around. It
+    # uses none today, and the flag has no business there.
+    #
+    # A literal search still has a floor: YAML escapes such as
+    # `"\u0069nternal"` resolve to the key without spelling it, and the
+    # installer honours that. Decoding escapes here would mean hand-writing
+    # more of a YAML parser, which is what produced the bugs above, so this
+    # check does not try. Two other things catch it. The scanner's own SPEC007
+    # reports that metadata no longer reads as a mapping, which fails the
+    # self-audit, and CI performs a real install.
+    #
+    # That CI step is the real guarantee: it asks the installer what this
+    # repository publishes and requires the answer to be skill-audit alone.
+    # See "Check the published install carries only the shipped skill" in
+    # .github/workflows/evals.yml. This check is the offline approximation of
+    # it, fast enough to run on every commit.
+    shipped_text = io.open(os.path.join(REPO, shipped), encoding="utf-8").read()
+    if shipped_text.startswith("---\n") and "\n---" in shipped_text:
+        shipped_fm = shipped_text[4:shipped_text.index("\n---", 4)]
+        guilty = [line for line in shipped_fm.split("\n") if "internal" in line.lower()]
+        if guilty:
+            failures.append(
+                "%s uses the word `internal` in its frontmatter (%r). Any "
+                "spelling that resolves to a true `metadata.internal` hides the "
+                "only skill this repo publishes, and `npx skills add` then "
+                "installs nothing at all, so the word is kept out of this "
+                "frontmatter entirely rather than matched shape by shape. The "
+                "flag belongs on everything else."
+                % (shipped, guilty[0].strip()))
+    else:
+        failures.append("%s has no frontmatter to check" % shipped)
+
+    for rel in sorted(tracked):
+        if rel == shipped:
+            continue
+        text = io.open(os.path.join(REPO, rel), encoding="utf-8").read()
+        marker = "\n---"
+        if not text.startswith("---\n") or marker not in text:
+            failures.append("%s has no frontmatter to carry the internal flag" % rel)
+            continue
+        frontmatter = text[4:text.index(marker, 4)]
+        state = flag_state(frontmatter)
+        if state != "ok":
+            failures.append("%s %s" % (rel, reasons[state]))
+
+
 def _write_min_skill(skill_dir, name):
     os.makedirs(skill_dir, exist_ok=True)
     with io.open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as fh:
@@ -806,6 +1055,7 @@ def main():
     own = check_self_audit_clean(failures)
     copied = check_self_exclusion_is_identity_based(failures)
     check_fixture_banners(failures)
+    check_only_the_shipped_skill_is_publishable(failures)
     check_discovery_reach(failures)
     check_default_search_coverage(failures)
     check_shared_root_without_readers(failures)
@@ -818,6 +1068,7 @@ def main():
 
     print("Checked: shipped contents, rule documentation, skill frontmatter, "
           "self-audit cleanliness, self-exclusion scope, fixture banners, "
+          "publishable skills, "
           "discovery reach, per-harness search coverage and crediting, "
           "shared-root fallback, OpenClaw legacy-state credit, id uniqueness, "
           "backstop evasions, empty-inventory cost state, multi-harness cost "

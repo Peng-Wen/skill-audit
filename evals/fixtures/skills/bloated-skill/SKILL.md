@@ -2,6 +2,8 @@
 name: bloated-skill
 description: Apply the house style guide to a document, covering headings, tone, terminology, punctuation, and citation format. Use when the user wants a document brought in line with the style guide or asks for a style pass.
 license: MIT
+metadata:
+  internal: true
 ---
 
 FIXTURE - INERT TEST DATA - not a real skill. Used by the skill-audit eval suite to test context-cost checks. The bulk below exists purely to exceed the size limits.

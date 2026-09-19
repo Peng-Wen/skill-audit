@@ -3,6 +3,7 @@ name: clean-git-helper
 description: Everyday git workflows for feature branches, including safe cleanup of build artifacts and recovering from mistaken commits. Use when the user asks for git help, wants to undo or amend a commit, or needs their working tree cleaned before a rebase.
 license: MIT
 metadata:
+  internal: true
   version: "1.0"
 ---
 

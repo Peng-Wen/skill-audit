@@ -25,6 +25,47 @@ jobs:
       - name: Validate against the Agent Skills specification
         run: npx -y skills-ref@latest validate ./skill-audit
 
+      # The authority on what leaves this repository. Everything else about
+      # the internal flag is read out of YAML by hand, and eight rounds of
+      # review showed that approximation keeps missing a spelling, in both
+      # directions: a skill that should stay unpublished slipping out, and the
+      # shipped skill being hidden so the install carries nothing.
+      #
+      # This performs the install rather than reading the CLI's report of one.
+      # Its listing output is decorated for a terminal, differs without a TTY,
+      # and `--json` covers `skills ls` rather than this path, so parsing it is
+      # its own source of breakage. A throwaway HOME and a look at what landed
+      # on disk asks the same question with nothing to misparse.
+      #
+      # The version is pinned so an upstream release cannot fail an unrelated
+      # pull request; bump it deliberately to re-verify against a newer
+      # installer.
+      - name: Check the published install carries only the shipped skill
+        run: |
+          set -euo pipefail
+          for flags in "" "--full-depth"; do
+            mode="${flags:-default}"
+            tmp=$(mktemp -d)
+            if ! HOME="$tmp" XDG_CONFIG_HOME="$tmp/.config" \
+                 npx -y skills@1.5.24 add . --global --agent claude-code --yes $flags \
+                 >"$tmp/log" 2>&1; then
+              cat "$tmp/log"
+              echo "The installer failed outright in $mode mode. It errors when a"
+              echo "repository publishes nothing, so check whether the shipped"
+              echo "skill has been marked internal."
+              exit 1
+            fi
+            installed=$(find "$tmp" -name SKILL.md -print 2>/dev/null \
+              | sed 's#.*/\([^/]*\)/SKILL.md$#\1#' | sort -u | paste -sd, -)
+            echo "$mode -> [$installed]"
+            if [ "$installed" != "skill-audit" ]; then
+              cat "$tmp/log"
+              echo "Expected an install of skill-audit alone, got [$installed]."
+              exit 1
+            fi
+            rm -rf "$tmp"
+          done
+
       - name: Run the deterministic eval lane
         run: python3 evals/run_evals.py --lane scanner-only --ci
 

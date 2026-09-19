@@ -384,9 +384,17 @@ def check_only_the_shipped_skill_is_publishable(failures):
     # skill's frontmatter, which no quoting or key syntax can get around. It
     # uses none today, and the flag has no business there.
     #
-    # The real guarantee lives in CI, which asks the installer itself what this
-    # repository publishes and requires the answer to be skill-audit alone. See
-    # the "Check the published install carries only the shipped skill" step in
+    # A literal search still has a floor: YAML escapes such as
+    # `"\u0069nternal"` resolve to the key without spelling it, and the
+    # installer honours that. Decoding escapes here would mean hand-writing
+    # more of a YAML parser, which is what produced the bugs above, so this
+    # check does not try. Two other things catch it. The scanner's own SPEC007
+    # reports that metadata no longer reads as a mapping, which fails the
+    # self-audit, and CI performs a real install.
+    #
+    # That CI step is the real guarantee: it asks the installer what this
+    # repository publishes and requires the answer to be skill-audit alone.
+    # See "Check the published install carries only the shipped skill" in
     # .github/workflows/evals.yml. This check is the offline approximation of
     # it, fast enough to run on every commit.
     shipped_text = io.open(os.path.join(REPO, shipped), encoding="utf-8").read()

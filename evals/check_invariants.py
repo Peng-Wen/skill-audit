@@ -247,7 +247,7 @@ def check_only_the_shipped_skill_is_publishable(failures):
         return None, None
 
     def flag_state(frontmatter):
-        """One of 'ok', 'quoted', 'continued', 'malformed', 'misparented', 'absent'.
+        """'ok', 'quoted', 'continued', 'tabbed', 'malformed', 'misparented', 'absent'.
 
         YAML only reads `key: value` as a mapping entry when whitespace or a
         line end follows the colon. `internal:true` is therefore the plain
@@ -261,6 +261,14 @@ def check_only_the_shipped_skill_is_publishable(failures):
         if entries:
             own = [e for e in entries
                    if len(e) - len(e.lstrip()) == indent and e.strip().startswith("internal:")]
+            # A tab in the indentation is not a working flag and not a
+            # hidden skill either: YAML forbids tabs there, so the whole
+            # frontmatter fails to parse and the installer skips the file with
+            # a warning rather than reading any flag out of it. The outcome is
+            # safe, but calling it "ok" would tell an author the flag works
+            # when the skill is simply broken everywhere.
+            if any("\t" in line[:len(line) - len(line.lstrip())] for line in entries):
+                return "tabbed"
             if own:
                 # A plain scalar keeps going onto the following lines while
                 # they are more indented, blank lines included, so
@@ -298,6 +306,10 @@ def check_only_the_shipped_skill_is_publishable(failures):
                    "or a `#` with no whitespace before it, which YAML keeps as "
                    "part of the scalar rather than starting a comment. Only "
                    "`true`, `True` and `TRUE` are booleans."),
+        "tabbed": ("indents its metadata with a tab. YAML forbids tabs in "
+                   "indentation, so this frontmatter does not parse at all and "
+                   "the installer skips the skill rather than reading a flag "
+                   "from it. Indent with spaces."),
         "continued": ("writes the flag with a more indented line under it. YAML "
                       "folds that into the value, so it becomes a string rather "
                       "than a boolean and the skill is published; keep the value "
@@ -333,6 +345,8 @@ def check_only_the_shipped_skill_is_publishable(failures):
         ("metadata:\n  internal: true\t# tabbed comment", "ok"),
         ("metadata:\n  internal: true#comment", "quoted"),
         ("metadata:\n  internal: true\n    false", "continued"),
+        ("metadata:\n\tinternal: true", "tabbed"),
+        ("metadata:\n \tinternal: true", "tabbed"),
         ("metadata:\n  internal: true\n\n    folded", "continued"),
         ('metadata:\n  internal: true\n  version: "1"', "ok"),
         ("metadata:\n  internal: true\n  nested:\n    a: b", "ok"),
